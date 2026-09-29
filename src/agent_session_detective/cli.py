@@ -6,6 +6,7 @@ import argparse
 import sys
 import webbrowser
 from pathlib import Path
+from typing import List
 
 from .catalog import load_catalog
 from .judge import Judge, judge_session
@@ -38,6 +39,9 @@ def main(argv=None) -> int:
                         help="Report output path (default: <session>/skill-audit.html).")
     parser.add_argument("--open", action="store_true", help="Open the report in a browser.")
     parser.add_argument("--no-judge", action="store_true", help="Skip LLM trigger judging.")
+    parser.add_argument("--expect", default=None,
+                        help="Comma-separated skill names expected to be consumed "
+                             "(loaded or file-read); rendered as a hit/miss checklist.")
     parser.add_argument("--judge-limit", type=int, default=None,
                         help="Judge only the first N unloaded skills (cheaper runs).")
     args = parser.parse_args(argv)
@@ -76,6 +80,7 @@ def main(argv=None) -> int:
         session, timeline, judgments,
         judge_enabled=judge is not None,
         catalog_size=len(catalog),
+        expected=_parse_expected(args.expect),
     )
     out_path = Path(args.out) if args.out else session_dir / "skill-audit.html"
     out_path.write_text(report, encoding="utf-8")
@@ -83,6 +88,10 @@ def main(argv=None) -> int:
     if args.open:
         webbrowser.open(out_path.as_uri())
     return 0
+
+
+def _parse_expected(raw: str) -> List[str]:
+    return [part.strip() for part in raw.split(",") if part.strip()] if raw else []
 
 
 if __name__ == "__main__":

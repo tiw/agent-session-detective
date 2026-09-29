@@ -88,10 +88,14 @@ def render_report(
     judgments: List[Judgment],
     judge_enabled: bool,
     catalog_size: int,
+    expected: Optional[List[str]] = None,
 ) -> str:
     missed = [j for j in judgments if j.triggered]
     errors = [j for j in judgments if j.error]
     total_turns = len(timeline.turns)
+
+    loaded_lower = {n.lower() for n in timeline.skill_names()}
+    read_lower = {f.skill_name.lower() for f in timeline.file_reads}
 
     parts = [
         "<!DOCTYPE html><html lang='zh'><head><meta charset='utf-8'>",
@@ -109,6 +113,21 @@ def render_report(
         "<span class='badge ok'>judge: %s</span>" % ("on" if judge_enabled else "off"),
         "</div></header><main>",
     ]
+
+    # --- Expectations checklist ---
+    if expected:
+        parts.append("<h2>Expectations</h2>")
+        parts.append("<table><tr><th>expected skill</th><th>status</th></tr>")
+        for name in expected:
+            key = name.lower()
+            if key in loaded_lower:
+                status = '<span class="badge ok">loaded</span>'
+            elif key in read_lower:
+                status = '<span class="badge infer">file-read only</span>'
+            else:
+                status = '<span class="badge missed">MISSING</span>'
+            parts.append("<tr><td>%s</td><td>%s</td></tr>" % (esc(name), status))
+        parts.append("</table>")
 
     # --- Findings ---
     parts.append("<h2>Findings</h2>")
