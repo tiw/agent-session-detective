@@ -4,7 +4,8 @@
 
 关键前提：
 
-- `poteto-mode` 装了 `disable-model-invocation: true`，**模型不能自动触发**，每个用例必须由用户显式以 `/poteto-mode` 开头。
+- ~~`poteto-mode` 装了 `disable-model-invocation: true`，模型不能自动触发~~ **2026-09-29 已移除**：桌面版把 `disable-model-invocation: true` 的 skill 整个排除在注册表外（`/poteto-mode` 报 40415 即此因），而 poteto-mode 的路由目标（how/why/architect/principle-*/tdd/unslop 等 45 个）全都带这个标记，不移除则整条路由链不可用。已批量移除并备份在 `/tmp/pstack-skills-backup-20260929.tgz`（回滚：解压覆盖回 `~/.agents/skills/`）。副作用：这些 skill 恢复模型可自动触发，日常会话有被自动加载的可能。
+- **必须开新窗口测试**：skill 清单在会话启动时绑定（profile.bind），旧会话（含报 404 的 session_e11e331b）不会刷新。
 - 读 `playbooks/*.md` 是路由的**正常机制**（router 明文要求 "open its file"）；读 `SKILL.md` 绕过 Skill 机制才是问题信号。审计时两者分开看。
 - `deslop` 在 Non-negotiables 里被要求（"Before commit → the deslop skill"）但**未安装**，相关项预期 MISSING，属已知目录缺口而非路由失败。
 
