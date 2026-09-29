@@ -45,7 +45,11 @@ def main(argv=None) -> int:
     session_dir = Path(args.session).expanduser() if args.session else find_latest_session(
         Path(args.sessions_root).expanduser()
     )
-    if session_dir is None or not (session_dir / "wire.jsonl").exists():
+    has_wire = session_dir is not None and (
+        (session_dir / "wire.jsonl").exists()
+        or (session_dir / "agents" / "main" / "wire.jsonl").exists()
+    )
+    if session_dir is None or not has_wire:
         print("No session found. Pass a session directory or check --sessions-root.", file=sys.stderr)
         return 1
 

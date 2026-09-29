@@ -103,6 +103,7 @@ def render_report(
         "<span class='badge'>turns: %d</span>" % total_turns,
         "<span class='badge'>events: %d</span>" % len(session.events),
         "<span class='badge fact'>skills loaded: %d</span>" % len(timeline.loads),
+        "<span class='badge'>skill files read: %d</span>" % len(timeline.file_reads),
         "<span class='badge'>compactions: %d</span>" % len(timeline.compactions),
         "<span class='badge'>catalog: %d skills</span>" % catalog_size,
         "<span class='badge ok'>judge: %s</span>" % ("on" if judge_enabled else "off"),
@@ -134,6 +135,25 @@ def render_report(
             "<p class='meta'>%d judgments discarded as tool defects (no verifiable evidence): %s</p>"
             % (len(errors), esc(", ".join(sorted({e.error or "" for e in errors}))))
         )
+
+    # --- SKILL.md file reads outside the Skill mechanism ---
+    if timeline.file_reads:
+        parts.append("<h2>SKILL.md Read as Plain Files</h2>")
+        parts.append(
+            "<p class='meta'>These SKILL.md files were read with the file tool, never loaded "
+            "through the Skill mechanism. Reading is a log fact; whether it was an adequate "
+            "substitute for a formal load is for the reader to judge.</p>"
+        )
+        for read in timeline.file_reads:
+            origin = "" if read.origin == "main" else '<span class="badge">%s</span>' % esc(read.origin)
+            parts.append(
+                "<details><summary><span class='badge infer'>file read</span> %s %s "
+                "<span class='meta'>%s · %s</span></summary><div class='body'>"
+                % (esc(read.skill_name), origin, fmt_ts(read.ts), esc(read.path))
+            )
+            if read.snippet:
+                parts.append("<pre>%s</pre>" % esc(read.snippet[:2000]))
+            parts.append("</div></details>")
 
     # --- Skill lifecycle timeline ---
     parts.append("<h2>Skill Lifecycle</h2>")

@@ -151,8 +151,8 @@ def summarize_turns(timeline: Timeline, per_turn_limit: int = 600) -> str:
 def judge_session(
     timeline: Timeline, skills: List[Skill], judge: Judge, limit: Optional[int] = None
 ) -> List[Judgment]:
-    loaded = set(timeline.skill_names())
-    candidates = [s for s in skills if s.name not in loaded]
+    consumed = set(timeline.consumed_skill_names())
+    candidates = [s for s in skills if s.name not in consumed]
     if limit:
         candidates = candidates[:limit]
     turns_block = summarize_turns(timeline)

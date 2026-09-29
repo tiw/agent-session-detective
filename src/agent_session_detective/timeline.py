@@ -11,11 +11,13 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Dict, List, Optional
 
 from .wire import Event, Session
 
 SKILL_TOOL_NAMES = {"skill", "skill_loaded"}
+SKILL_FILE_RE = re.compile(r"SKILL\.md", re.IGNORECASE)
 CJK_RE = re.compile(r"[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]")
 
 
@@ -48,6 +50,18 @@ class SkillLoad:
 
 
 @dataclass
+class SkillFileRead:
+    """A SKILL.md read as a plain file — a fact, distinct from a formal load."""
+
+    path: str
+    skill_name: str  # guessed from the file's parent directory
+    ts: Optional[float]
+    origin: str
+    source_line: int
+    snippet: str
+
+
+@dataclass
 class Compaction:
     index: int
     begin_ts: Optional[float]
@@ -57,12 +71,17 @@ class Compaction:
 @dataclass
 class Timeline:
     loads: List[SkillLoad] = field(default_factory=list)
+    file_reads: List[SkillFileRead] = field(default_factory=list)
     compactions: List[Compaction] = field(default_factory=list)
     status_series: List[Event] = field(default_factory=list)
     turns: List[Event] = field(default_factory=list)
 
     def skill_names(self) -> List[str]:
         return [l.skill_name for l in self.loads]
+
+    def consumed_skill_names(self) -> List[str]:
+        """Skills consumed either formally (load) or as plain file reads."""
+        return sorted(set(self.skill_names()) | {f.skill_name for f in self.file_reads})
 
 
 def _skill_name_from_call(arguments: str) -> str:
@@ -78,16 +97,31 @@ def _result_text(event: Event) -> tuple:
     return bool(rv.get("is_error")), str(rv.get("output") or "")
 
 
+def _skill_file_path(arguments: str) -> Optional[str]:
+    try:
+        parsed = json.loads(arguments)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    path = str(parsed.get("path") or parsed.get("file_path") or "")
+    return path if SKILL_FILE_RE.search(path) else None
+
+
 def build_timeline(session: Session) -> Timeline:
     timeline = Timeline(turns=session.turns())
 
     results_by_id: Dict[str, Event] = {}
     calls: List[Event] = []
+    file_read_calls: List[Event] = []
     for event in session.events:
         if event.type == "ToolCall":
             fn = event.payload.get("function", {})
-            if str(fn.get("name", "")).lower() in SKILL_TOOL_NAMES:
+            name = str(fn.get("name", "")).lower()
+            if name in SKILL_TOOL_NAMES:
                 calls.append(event)
+            elif name == "read":
+                path = _skill_file_path(str(fn.get("arguments", "")))
+                if path:
+                    file_read_calls.append(event)
         elif event.type == "ToolResult":
             results_by_id[str(event.payload.get("tool_call_id"))] = event
         elif event.type == "StatusUpdate":
@@ -120,6 +154,22 @@ def build_timeline(session: Session) -> Timeline:
                 load.context_usage_after = status.payload.get("context_usage")
                 break
         timeline.loads.append(load)
+
+    for call in file_read_calls:
+        fn = call.payload.get("function", {})
+        path = _skill_file_path(str(fn.get("arguments", ""))) or "?"
+        result = results_by_id.get(str(call.payload.get("id")))
+        _, snippet = _result_text(result) if result else (False, "")
+        timeline.file_reads.append(
+            SkillFileRead(
+                path=path,
+                skill_name=Path(path).parent.name,
+                ts=call.ts,
+                origin=call.origin,
+                source_line=call.seq,
+                snippet=snippet,
+            )
+        )
 
     # A compaction plausibly evicts every skill loaded before it. The log
     # never says "skill dropped", so this is a labeled inference (R3/AE1).

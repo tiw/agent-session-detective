@@ -1,11 +1,18 @@
 """Parse Kimi Code wire.jsonl session logs into typed events.
 
-Wire format (protocol 1.9): one JSON object per line. The first line is a
-metadata record; every subsequent line carries a ``message`` object with a
-``type`` (TurnBegin, StepBegin, ContentPart, ToolCall, ToolResult,
-StatusUpdate, CompactionBegin, CompactionEnd, SubagentEvent, ...) and a
-``payload``. Subagent logs live in ``subagents/<id>/wire.jsonl`` inside the
-session directory and are attributed to their parent.
+Two on-disk formats exist:
+
+- CLI format (protocol 1.9): each record carries a ``message`` object with a
+  ``type`` (TurnBegin, ToolCall, StatusUpdate, CompactionBegin, ...) and a
+  ``payload``. Main log at the session root; subagent logs under
+  ``subagents/<id>/wire.jsonl``.
+- Desktop format (protocol 1.5): typed records such as ``turn.prompt``,
+  ``context.append_loop_event`` (step.begin, content.part, tool.call,
+  tool.result), ``token_counting.measured``, ``subagent.spawned``. Main log
+  at ``agents/main/wire.jsonl``; subagent logs under ``agents/agent-*/``.
+
+Desktop records are translated into the same Event model the CLI format
+produces, so downstream modules only see one shape.
 """
 
 from __future__ import annotations
@@ -14,6 +21,7 @@ import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterator, List, Optional
+
 
 @dataclass
 class Event:
@@ -56,8 +64,48 @@ class Session:
         return [e for e in self.events if e.type == "TurnBegin"]
 
 
+def _translate_desktop(record: dict) -> Optional[tuple]:
+    """Map one desktop-format record to (type, payload), or None to skip."""
+    rtype = record.get("type")
+    if rtype == "turn.prompt":
+        origin = record.get("origin") or {}
+        if origin.get("kind", "user") != "user":
+            return None
+        return "TurnBegin", {"user_input": record.get("input") or []}
+    if rtype == "context.append_loop_event":
+        event = record.get("event") or {}
+        etype = event.get("type")
+        if etype == "step.begin":
+            return "StepBegin", {"n": event.get("step")}
+        if etype == "content.part":
+            return "ContentPart", event.get("part") or {}
+        if etype == "tool.call":
+            return "ToolCall", {
+                "id": event.get("toolCallId"),
+                "function": {
+                    "name": event.get("name"),
+                    "arguments": json.dumps(event.get("args") or {}, ensure_ascii=False),
+                },
+            }
+        if etype == "tool.result":
+            return "ToolResult", {
+                "tool_call_id": event.get("toolCallId"),
+                "return_value": event.get("result") or {},
+            }
+        return None
+    if rtype == "token_counting.measured":
+        return "StatusUpdate", {
+            "context_tokens": record.get("tokens"),
+            "context_usage": None,
+        }
+    if isinstance(rtype, str) and "compact" in rtype.lower():
+        return "CompactionBegin" if "begin" in rtype.lower() or "start" in rtype.lower() else "CompactionEnd", {}
+    return None
+
+
 def parse_wire(path: Path, origin: str) -> Iterator[Event]:
     seq = 0
+    desktop: Optional[bool] = None
     with open(path, "r", encoding="utf-8", errors="replace") as fh:
         for line in fh:
             line = line.strip()
@@ -68,7 +116,25 @@ def parse_wire(path: Path, origin: str) -> Iterator[Event]:
             except json.JSONDecodeError:
                 continue
             seq += 1
-            if record.get("type") == "metadata":
+            rtype = record.get("type")
+            if rtype == "metadata":
+                continue
+            if desktop is None:
+                desktop = "message" not in record
+            if desktop:
+                ts = record.get("time")
+                translated = _translate_desktop(record)
+                if translated is None:
+                    continue
+                etype, payload = translated
+                yield Event(
+                    ts=ts / 1000.0 if isinstance(ts, (int, float)) else None,
+                    type=etype,
+                    payload=payload,
+                    origin=origin,
+                    source=path,
+                    seq=seq,
+                )
                 continue
             message = record.get("message")
             if not isinstance(message, dict):
@@ -86,21 +152,29 @@ def parse_wire(path: Path, origin: str) -> Iterator[Event]:
 def load_session(directory: Path) -> Session:
     directory = Path(directory)
     session = Session(directory=directory)
-    main_wire = directory / "wire.jsonl"
-    if main_wire.exists():
-        for record in parse_wire(main_wire, origin="main"):
-            session.events.append(record)
-    subagents_dir = directory / "subagents"
-    if subagents_dir.is_dir():
-        for wire in sorted(subagents_dir.glob("*/wire.jsonl")):
-            origin = "subagent:%s" % wire.parent.name
-            for record in parse_wire(wire, origin=origin):
+    main_candidates = [directory / "wire.jsonl", directory / "agents" / "main" / "wire.jsonl"]
+    for main_wire in main_candidates:
+        if main_wire.exists():
+            for record in parse_wire(main_wire, origin="main"):
                 session.events.append(record)
+            break
+    sub_wires = list((directory / "subagents").glob("*/wire.jsonl")) if (directory / "subagents").is_dir() else []
+    agents_dir = directory / "agents"
+    if agents_dir.is_dir():
+        sub_wires.extend(w for w in agents_dir.glob("agent-*/wire.jsonl"))
+    for wire in sorted(sub_wires):
+        origin = "subagent:%s" % wire.parent.name
+        for record in parse_wire(wire, origin=origin):
+            session.events.append(record)
     session.events.sort(key=lambda e: (e.ts is None, e.ts or 0.0, e.seq))
     return session
 
 
 def find_latest_session(base: Path) -> Optional[Path]:
     """Most recently modified session directory under the sessions root."""
-    candidates = sorted(base.glob("*/*/wire.jsonl"), key=lambda p: p.stat().st_mtime)
-    return candidates[-1].parent if candidates else None
+    wires = list(base.glob("*/*/wire.jsonl")) + list(base.glob("*/*/agents/main/wire.jsonl"))
+    if not wires:
+        return None
+    newest = max(wires, key=lambda p: p.stat().st_mtime)
+    # Session dir is the parent of the wire, or two levels up in the agents layout.
+    return newest.parent.parent if newest.parent.name in ("main", "agent") else newest.parent
