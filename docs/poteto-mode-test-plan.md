@@ -123,3 +123,21 @@ TodoList 逐字核对（机械化）：在报告 Event Feed 里找 TodoList 工�
 - 回复格式合规（结果→根因→验证→流程决策，principle 逐条引用）。
 
 **归因：模型裁量越界（第一类）。** playbook 中层步骤的"按需加载"没有强制机制，靠模型自觉——这是路由体系的结构性弱点，比单个 skill 没装更值得记录。
+
+### Round 2（2026-09-29）— T2 feature
+
+会话：`~/.kimi-code/sessions/wd_target_fe501ec3a1a5/session_ad4c9229-25cb-4afc-ab27-854a520e70c0`
+
+**实现：通过。** 4 个 feature 测试全绿（含 PATCH 404 边界），3 原绿保持，3 bug 测试如实声明"刻意保留"未动；diff +30/−2 未提交（agent 声明"说一声就 commit"，git status 证实）。
+
+**路由：明显好于 T1，skip 纪律到位。**
+
+- ✅ Poteto Mode 正式加载；feature playbook 8 步进 TodoList（基本逐字）。
+- ✅ **5 个跳过步骤全部带 `skip: <原因>`**（how：文件已全文读、hook 点明显；architect：单文件单形状；commit：用户未要求；interrogate：设计无争议；PR：无 remote）——这正是 playbook 明文授权的模式（"stays in the list with a one-line skip: <reason>"）。T1 的违规是跳过**无**说明，本轮同类裁量**有**说明即合规。
+- ✅ step 4 delegate 真实发生（agent-0 实现，main 逐行复核 diff）；验证自己跑的非转述。
+- ❌ step 3 吞吐检查点未展开为 4 个 todo 项（playbook 要求逐项保留、不适用标 `n/a:`），只在回复里回顾了四个维度——半合规。
+- 🟡 delegate 未给独立 worktree（共享目录 Edit；单文件串行工作，影响小）。formal load 后又直读了一次 poteto-mode 的 SKILL.md（良性）。
+
+**归因：规则理解基本到位（比 R1 好），残余偏差在检查点展开这类形式要求（第三类，规则本身偏繁琐 vs 模型倾向概括）。**
+
+**跨轮趋势：** T1 的无声丢链 → T2 的带理由跳过。同一模型的行为方差很大，"中层链遵守度"目前不可预测，需要更多轮次才能判断是否为稳定改进（比如提示词里 feature 的 skip 表述更醒目）。
