@@ -108,3 +108,18 @@ TodoList 逐字核对（机械化）：在报告 Event Feed 里找 TodoList 工�
 ## 记录
 
 每轮测试把结论记在会话目录名的旁边：日期、用例、MISSING 项、是否为目录缺口（如 deslop）。积累几轮后区分三类问题：路由没走（模型问题）、skill 没装（目录缺口）、规则本身有歧义（playbook 描述问题）。
+
+### Round 1（2026-09-29）— T1 bugfix
+
+会话：`~/.kimi-code/sessions/wd_poteto_test_52f213ee78da/session_d3eb4a59-8402-43be-8a00-bf8cb4991fd3`
+
+**实现：通过。** 3 bug 全修（各有 curl 前后证据），3 原绿保持，diff 4 增 3 删，提交 `109e80e`。
+
+**路由：顶层合规，中层静默丢链。**
+
+- ✅ Poteto Mode 经 Skill 工具正式加载（`/skill:Poteto Mode`）；bug-fix playbook 6 步进 TodoList；step 6 正确 `skip: 无 remote`。
+- 🟡 4 个 principle（fix-root-causes、laziness-protocol、prove-it-works、sequence-verifiable-units）以读文件方式加载——SKILL.md 原文即 "Read the leaf skill in full"，灰色地带，暂不判违规。
+- ❌ how / why / architect / tdd 全程 MISSING 且无 skip 说明。模型把三个一行 bug 判为 trivial，跳过了 step 2/3/5 明文要求的技能链——playbook 只授权"跳过要标 skip"，未授权这层裁量。
+- 回复格式合规（结果→根因→验证→流程决策，principle 逐条引用）。
+
+**归因：模型裁量越界（第一类）。** playbook 中层步骤的"按需加载"没有强制机制，靠模型自觉——这是路由体系的结构性弱点，比单个 skill 没装更值得记录。

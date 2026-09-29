@@ -38,6 +38,7 @@ class SkillLoad:
     origin: str
     content: str  # captured at load time (R10)
     is_error: bool
+    source: Path
     source_line: int
     tokens_est: int = 0
     context_tokens_after: Optional[int] = None
@@ -144,6 +145,7 @@ def build_timeline(session: Session) -> Timeline:
             origin=call.origin,
             content=content,
             is_error=is_error,
+            source=call.source,
             source_line=call.seq,
             tokens_est=estimate_tokens(content),
         )
