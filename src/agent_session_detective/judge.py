@@ -36,7 +36,7 @@ Skill trigger wording (what the agent sees when deciding):
 
 Question: at any point in this session, should the agent have triggered (loaded) this skill? Reply with a JSON object and nothing else:
 {{"triggered": true/false, "turn": <1-based turn number or null>, "rationale": "<one or two sentences>", "evidence": "<verbatim quote from the session justifying the judgment>", "confidence": <0.0-1.0>}}
-Rules: "evidence" must be a verbatim quote copied from the turns above, not a paraphrase. If triggered is false, turn is null and evidence may be empty."""
+Rules: "evidence" must be a verbatim quote copied from the turns above, not a paraphrase. If triggered is false, turn is null and evidence may be empty. Calibrate strictly: most skills should be false. Answer true only when the session clearly calls for this specific skill and a competent agent would be expected to load it, not merely because the topic is vaguely related. Generic principles or advice skills count as triggered only when the session is directly and explicitly about that principle."""
 
 
 @dataclass
@@ -59,12 +59,18 @@ class Judge:
 
     @classmethod
     def from_env(cls) -> Optional["Judge"]:
-        base_url = os.environ.get(ENV_BASE_URL, "https://api.openai.com/v1")
-        api_key = os.environ.get(ENV_API_KEY, "")
-        model = os.environ.get(ENV_MODEL, "")
+        base_url = os.environ.get(ENV_BASE_URL)
+        api_key = os.environ.get(ENV_API_KEY)
+        model = os.environ.get(ENV_MODEL)
+        if not api_key:
+            # Fallback: DeepSeek credentials, if present, are a working default.
+            api_key = os.environ.get("DEEPSEEK_API_KEY", "")
+            if api_key:
+                base_url = base_url or "https://api.deepseek.com/v1"
+                model = model or "deepseek-flash"
         if not api_key or not model:
             return None
-        return cls(base_url=base_url, api_key=api_key, model=model)
+        return cls(base_url=base_url or "https://api.openai.com/v1", api_key=api_key, model=model)
 
     def ask(self, prompt: str) -> str:
         body = json.dumps(
