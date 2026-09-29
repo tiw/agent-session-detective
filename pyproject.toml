@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agent-session-detective"
+version = "0.1.0"
+description = "Audit agent sessions against their skills: what loaded, what was missed, and why"
+requires-python = ">=3.9"
+dependencies = []
+
+[project.scripts]
+asd = "agent_session_detective.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
