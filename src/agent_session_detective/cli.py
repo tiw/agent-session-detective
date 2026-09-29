@@ -64,8 +64,8 @@ def main(argv=None) -> int:
     judge = None if args.no_judge else Judge.from_env()
     judgments = []
     if judge:
-        print("Judging %d unloaded skills (model: %s)..." % (
-            min(args.judge_limit or len(catalog), max(len(catalog) - len(timeline.skill_names()), 0)),
+        print("Judging %d unconsumed skills (model: %s)..." % (
+            min(args.judge_limit or len(catalog), max(len(catalog) - len(timeline.consumed_skill_names()), 0)),
             judge.model,
         ), file=sys.stderr)
         judgments = judge_session(timeline, catalog, judge, limit=args.judge_limit)
