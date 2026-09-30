@@ -141,3 +141,31 @@ TodoList 逐字核对（机械化）：在报告 Event Feed 里找 TodoList 工�
 **归因：规则理解基本到位（比 R1 好），残余偏差在检查点展开这类形式要求（第三类，规则本身偏繁琐 vs 模型倾向概括）。**
 
 **跨轮趋势：** T1 的无声丢链 → T2 的带理由跳过。同一模型的行为方差很大，"中层链遵守度"目前不可预测，需要更多轮次才能判断是否为稳定改进（比如提示词里 feature 的 skip 表述更醒目）。
+
+### Round 3（2026-09-30）— A/B：kimi vs codex 同题 bugfix
+
+环境：`/tmp/ab/{kimi,codex}-target`（同一初始提交的独立副本，排除互相干扰）。题目与 T1 相同。基础设施事故：两臂首跑同遭 provider 429（共享后端过载），重跑后完成。
+
+**kimi-cli（`-p` 无头模式）：skill 全程缺席。** CLI 的 skill 清单是独立的注册表缓存（51 个，与桌面版修复前的旧清单一致），手动恢复的 45 个 pstack skill 不在其中。`--skills-dir ~/.agents/skills` 也无法注入。模型把 `/skill:Poteto Mode` 当无效文本忽略后裸跑：3 bug 全修、自测通过、范围声明诚实（exit 0）。结论：kimi 桌面版的 skill 注册表修复没有传导到 CLI 进程，CLI 走自己的发现/校验路径（待查）。
+
+**codex（`codex exec` + 显式指针）：流程最显式的一轮。**
+
+- ✅ 先读 SKILL.md 全文（4 次 cat/sed），随后明确声明「Playbook match: this is a Bug fix」再读 bug-fix.md——playbook 匹配是显式说出来的
+- ✅ 先复现后修（「the playbook requires runtime evidence first」），修复前后各跑一次全套，最后对 3 个 bug 用例单独隔离验证
+- ✅ 读了 principle-fix-root-causes；回复带 Principles applied 段（fix-root-causes、laziness-protocol，叶文件均已读）
+- ✅ 两个 skip 都带理由（delegate：90 行文件不值得；commit staging：用户未要求）
+- ❌ how/why 未加载（与 kimi T1 相同的中层丢链）；无 todolist 工件（无工具也未用 todo.md fallback）
+- 实现：3/3 修复，diff 4 增 3 删，与 kimi T1 的 diff 行数完全一致
+
+**三方对比（同题）：**
+
+| 维度 | kimi T1（桌面，skill 加载） | kimi-cli（skill 缺席） | codex（skill 加载） |
+|---|---|---|---|
+| 实现结果 | 3/3，diff 4+/3- | 3/3，diff 4+/3- | 3/3，diff 4+/3- |
+| playbook 匹配 | 隐式（todolist 步骤体现） | 无 | **显式声明** |
+| 步骤工件 | ✅ TodoList 6 步 | 无 | 无 |
+| skip 理由 | 1/3 处（step 6） | n/a | 2/2 处 |
+| principle 加载 | 4 个 | 0 | 1 个 |
+| how/why 中层 | ❌ | n/a | ❌ |
+
+**归因。** 对三个一行 bug 这种规模，skill 加成的体现在过程严谨性（证据链、skip 声明、可审计工件）而非结果质量——三轮实现结果完全相同。中层链（how/why/tdd）在两个 harness 里都没被加载，是模型对 trivial 任务的稳定裁量，不是 harness 差异。codex 的回复显式度最高（匹配声明 + skip 段），kimi 的工件保真度最高（todolist 逐字步骤）。下一轮拉开差距需要更复杂的题目（跨文件 bug、需要真 delegate 的规模）。
