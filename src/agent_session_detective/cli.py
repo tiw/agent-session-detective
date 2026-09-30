@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import List
 
 from .catalog import load_catalog
+from .if_eval import IFResult, evaluate_playbook
 from .judge import Judge, judge_session
 from .report import render_report
 from .timeline import build_timeline
@@ -44,6 +45,12 @@ def main(argv=None) -> int:
                              "(loaded or file-read); rendered as a hit/miss checklist.")
     parser.add_argument("--judge-limit", type=int, default=None,
                         help="Judge only the first N unloaded skills (cheaper runs).")
+    parser.add_argument("--steps", action="append", default=None, metavar="PLAYBOOK.md",
+                        help="Evaluate instruction following against a playbook's numbered steps "
+                             "(repeatable; needs a judge).")
+    parser.add_argument("--gate", type=float, default=None,
+                        help="CI gate: exit non-zero when IF coverage is below this (default 0.75 "
+                             "when --steps is set) or when an --expect skill is missing.")
     args = parser.parse_args(argv)
 
     session_dir = Path(args.session).expanduser() if args.session else find_latest_session(
@@ -68,26 +75,50 @@ def main(argv=None) -> int:
     judge = None if args.no_judge else Judge.from_env()
     judgments = []
     if judge:
-        print("Judging %d unconsumed skills (model: %s)..." % (
-            min(args.judge_limit or len(catalog), max(len(catalog) - len(timeline.consumed_skill_names()), 0)),
-            judge.model,
-        ), file=sys.stderr)
+        unconsumed = max(len(catalog) - len(timeline.consumed_skill_names()), 0)
+        n = min(args.judge_limit, unconsumed) if args.judge_limit is not None else unconsumed
+        print("Judging %d unconsumed skills (model: %s)..." % (n, judge.model), file=sys.stderr)
         judgments = judge_session(timeline, catalog, judge, limit=args.judge_limit)
     else:
         print("Judge not configured; facts only. See ASD_JUDGE_* env vars.", file=sys.stderr)
+
+    if_results = []
+    if args.steps:
+        if not judge:
+            print("--steps needs a judge (same credentials as trigger judging).", file=sys.stderr)
+            return 1
+        for playbook in args.steps:
+            print("Evaluating instruction following: %s" % playbook, file=sys.stderr)
+            if_results.append(
+                evaluate_playbook(judge, Path(playbook), session, gate=args.gate)
+            )
 
     report = render_report(
         session, timeline, judgments,
         judge_enabled=judge is not None,
         catalog_size=len(catalog),
         expected=_parse_expected(args.expect),
+        if_results=if_results,
     )
     out_path = Path(args.out) if args.out else session_dir / "skill-audit.html"
     out_path.write_text(report, encoding="utf-8")
     print(out_path)
+
+    failed = False
+    if if_results:
+        for r in if_results:
+            label = "n/a" if r.not_applicable else "%.2f (gate %.2f)" % (r.coverage, r.gate)
+            print("IF %s: %s -> %s" % (r.playbook, label, "PASS" if r.passed else "FAIL"), file=sys.stderr)
+            failed = failed or not r.passed
+    if args.gate is not None:
+        missing = [e for e in _parse_expected(args.expect)
+                   if e.lower() not in {n.lower() for n in timeline.consumed_skill_names()}]
+        if missing:
+            print("MISSING expected skills: %s" % ", ".join(missing), file=sys.stderr)
+            failed = True
     if args.open:
         webbrowser.open(out_path.as_uri())
-    return 0
+    return 1 if failed else 0
 
 
 def _parse_expected(raw: str) -> List[str]:

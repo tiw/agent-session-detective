@@ -11,6 +11,7 @@ import html
 from datetime import datetime
 from typing import List, Optional
 
+from .if_eval import IFResult
 from .judge import Judgment
 from .timeline import Timeline
 from .wire import Session
@@ -89,7 +90,9 @@ def render_report(
     judge_enabled: bool,
     catalog_size: int,
     expected: Optional[List[str]] = None,
+    if_results: Optional[List["IFResult"]] = None,
 ) -> str:
+    if_results = if_results or []
     missed = [j for j in judgments if j.triggered]
     errors = [j for j in judgments if j.error]
     total_turns = len(timeline.turns)
@@ -154,6 +157,44 @@ def render_report(
             "<p class='meta'>%d judgments discarded as tool defects (no verifiable evidence): %s</p>"
             % (len(errors), esc(", ".join(sorted({e.error or "" for e in errors}))))
         )
+
+    # --- Instruction Following ---
+    if if_results:
+        parts.append("<h2>Instruction Following</h2>")
+        parts.append(
+            "<p class='meta'>Step verdicts anchored to trajectory evidence (actions and "
+            "results only; plans and claims do not count). Coverage is recomputed from "
+            "verdicts, not taken from the judge. Gate: 0.75 = Mostly Followed.</p>"
+        )
+        for r in if_results:
+            if r.not_applicable:
+                parts.append(
+                    "<p><span class='badge'>%s</span> <span class='meta'>no enumerable "
+                    "steps; not applicable, excluded from aggregation</span></p>" % esc(r.playbook)
+                )
+                continue
+            verdict_badge = (
+                '<span class="badge ok">PASS %.2f</span>' if r.passed
+                else '<span class="badge missed">FAIL %.2f</span>'
+            ) % r.coverage
+            parts.append(
+                "<details open><summary>%s %s <span class='meta'>gate %.2f · %d steps</span>"
+                "</summary><div class='body'><table>"
+                "<tr><th>#</th><th>step</th><th>status</th><th>evidence</th></tr>"
+                % (esc(r.playbook), verdict_badge, r.gate, len(r.verdicts))
+            )
+            for i, v in enumerate(r.verdicts, 1):
+                badge_cls = {"covered": "ok", "partial": "infer", "skipped": "missed"}[v.status]
+                parts.append(
+                    "<tr><td>%d</td><td>%s</td><td><span class='badge %s'>%s</span></td>"
+                    "<td>%s%s</td></tr>"
+                    % (
+                        i, esc(v.step[:160]), badge_cls, v.status,
+                        esc(v.evidence[:200]),
+                        ("<br><span class='meta'>%s</span>" % esc(v.rationale[:160])) if v.rationale else "",
+                    )
+                )
+            parts.append("</table></div></details>")
 
     # --- SKILL.md file reads outside the Skill mechanism ---
     if timeline.file_reads:
