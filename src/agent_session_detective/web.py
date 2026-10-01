@@ -6,6 +6,7 @@ under webapp/. Audit jobs run on a background thread and are polled by id.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import threading
 import time
@@ -24,6 +25,88 @@ from .wire import Session, find_latest_session, load_session
 WEBAPP_DIR = Path(__file__).parent / "webapp"
 
 DEFAULT_ROOTS = ["~/.kimi-code/sessions", "~/.kimi/sessions"]
+
+CACHE_DIR = Path("~/.cache/agent-session-detective").expanduser()
+
+
+# --------------------------------------------------------------------------
+# audit result cache: same log fingerprint + same params + same judge model
+# -> same result is served from disk instead of recomputing. Judge verdicts
+# carry LLM variance even at temperature 0, so the UI marks cached results.
+# --------------------------------------------------------------------------
+
+def cache_key(params: dict) -> str:
+    raw = json.dumps(
+        {
+            "path": str(Path(params["path"]).expanduser()),
+            "expect": sorted(params.get("expect") or []),
+            "steps": sorted(params.get("steps") or []),
+            "judge_triggers": bool(params.get("judge_triggers")),
+        },
+        sort_keys=True,
+    )
+    return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
+
+
+def fingerprint(session_path: str, judge_model: str) -> str:
+    """Log identity: newest mtime + total size of every wire file, plus the
+    judge model (different model, different verdicts)."""
+    base = Path(session_path).expanduser()
+    wires = [base / "wire.jsonl"]
+    sub = base / "subagents"
+    agents = base / "agents"
+    if sub.is_dir():
+        wires += list(sub.glob("*/wire.jsonl"))
+    if agents.is_dir():
+        wires += list(agents.glob("*/wire.jsonl"))
+    newest, total = 0.0, 0
+    for w in wires:
+        try:
+            st = w.stat()
+            newest = max(newest, st.st_mtime)
+            total += st.st_size
+        except OSError:
+            continue
+    return "%.3f:%d:%s" % (newest, total, judge_model)
+
+
+def cache_load(key: str, fp: str) -> Optional[dict]:
+    path = CACHE_DIR / (key + ".json")
+    if not path.exists():
+        return None
+    try:
+        entry = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if entry.get("fingerprint") != fp:
+        return None
+    return entry.get("result")
+
+
+def cache_store(key: str, fp: str, result: dict) -> None:
+    try:
+        CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        payload = {"fingerprint": fp, "result": result}
+        (CACHE_DIR / (key + ".json")).write_text(
+            json.dumps(payload, ensure_ascii=False), encoding="utf-8"
+        )
+    except OSError:
+        pass
+
+
+def cached_paths() -> set:
+    """Session paths that have at least one cached audit (for sidebar dots)."""
+    out = set()
+    if not CACHE_DIR.is_dir():
+        return out
+    for f in CACHE_DIR.glob("*.json"):
+        try:
+            entry = json.loads(f.read_text(encoding="utf-8"))
+            out.add(entry.get("result", {}).get("session", {}).get("path", ""))
+        except (OSError, json.JSONDecodeError):
+            continue
+    out.discard("")
+    return out
 
 
 # --------------------------------------------------------------------------
@@ -172,7 +255,9 @@ def list_sessions(roots: Optional[List[str]] = None) -> List[dict]:
                 "mtime": mtime,
             }
     sessions = sorted(found.values(), key=lambda s: -s["mtime"])
+    audited = cached_paths()
     for s in sessions:
+        s["cached"] = s["path"] in audited
         try:
             session = load_session(Path(s["path"]))
             timeline = build_timeline(session)
@@ -312,6 +397,13 @@ def run_audit(job: Job) -> None:
         }
         job.mark("done in %.1fs" % (time.time() - job.started_at))
         job.status = "done"
+        key = cache_key(job.params)
+        fp = fingerprint(
+            job.params["path"],
+            (Judge.from_env().model if Judge.from_env() else "no-judge"),
+        )
+        cache_store(key, fp, job.result)
+        job.result["cached"] = False
     except Exception as exc:
         job.status = "error"
         job.error = str(exc)
@@ -402,6 +494,16 @@ class Handler(BaseHTTPRequestHandler):
         if not params.get("path"):
             self._send_json(400, {"error": "path required"})
             return
+        # cache short-circuit: same log fingerprint + same params + same
+        # judge model serves the previous result instead of recomputing
+        if not params.get("force"):
+            judge = Judge.from_env()
+            key = cache_key(params)
+            cached = cache_load(key, fingerprint(params["path"], judge.model if judge else "no-judge"))
+            if cached is not None:
+                cached["cached"] = True
+                self._send_json(200, {"cached": True, "result": cached})
+                return
         job = start_job(params)
         self._send_json(202, {"job_id": job.id})
 

@@ -150,6 +150,7 @@
           badge("dim", (s.turns == null ? "?" : s.turns) + " turns") +
           badge("fact", (s.skills_loaded == null ? "?" : s.skills_loaded) + " loaded") +
           badge(s.skill_files_read ? "warn" : "dim", (s.skill_files_read == null ? "?" : s.skill_files_read) + " read") +
+          (s.cached ? badge("ok", "audited") : "") +
           "</div>";
         el.addEventListener("click", function () { openAudit(s, el); });
         sessionList.appendChild(el);
@@ -208,7 +209,41 @@
     };
     report.innerHTML = "";
     progress.hidden = false;
-    stepsBox.innerHTML = '<div class="step active">queued</div>';
+    stepsBox.innerHTML = '<div class="step active">checking cache</div>';
+    setStatus("audit running…");
+    fetch("/api/audit", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(params),
+    }).then(function (r) { return r.json(); }).then(function (data) {
+      if (data.cached) {
+        progress.hidden = true;
+        renderReport(data.result);
+        setStatus(data.result.status_line + " · cached");
+        return;
+      }
+      stepsBox.innerHTML = '<div class="step active">queued</div>';
+      pollJob(data.job_id);
+    }).catch(function (e) {
+      progress.hidden = true;
+      renderError(e.message);
+    });
+  });
+
+  function rerunFresh() {
+    if (!currentSession) return;
+    var params = {
+      path: currentSession.path,
+      expect: (auditForm.elements.expect.value || "").split(",").map(function (s) {
+        return s.trim();
+      }).filter(Boolean),
+      steps: auditForm.elements.playbook.value ? [auditForm.elements.playbook.value] : [],
+      judge_triggers: auditForm.elements.judge.checked,
+      force: true,
+    };
+    report.innerHTML = "";
+    progress.hidden = false;
+    stepsBox.innerHTML = '<div class="step active">re-running fresh (cache bypassed)</div>';
     setStatus("audit running…");
     fetch("/api/audit", {
       method: "POST",
@@ -220,7 +255,7 @@
       progress.hidden = true;
       renderError(e.message);
     });
-  });
+  }
 
   function renderSteps(steps, running) {
     var recent = steps.slice(-3);
@@ -302,6 +337,19 @@
       "</div></section>"
     );
 
+    // cached banner: same log + same params, served from disk. judge
+    // verdicts carry LLM variance even at temperature 0, so offer re-run.
+    if (r.cached) {
+      parts.push(
+        "<section class='cached-banner'><div>" +
+        badge("warn", "cached") +
+        ' <span class="dim">同一日志指纹 + 同一参数的既有结果。事实层必然一致；judge 层有 LLM 方差（temperature=0 也不例外），重跑可能略有不同。</span>' +
+        "</div>" +
+        '<button class="btn small" id="rerun-btn" type="button">re-run fresh</button>' +
+        "</section>"
+      );
+    }
+
     // next steps: summary + 1-3 suggested follow-ups, per delivery checklist
     if (r.suggestions && r.suggestions.length) {
       parts.push(
@@ -381,6 +429,8 @@
       "plans counted as actions · model-reported arithmetic</div></section>");
 
     report.innerHTML = parts.join("");
+    var rerun = document.getElementById("rerun-btn");
+    if (rerun) rerun.addEventListener("click", rerunFresh);
   }
 
   loadSessions();
