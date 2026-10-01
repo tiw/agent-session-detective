@@ -129,6 +129,19 @@ JSON API 也可以独立使用（`GET /api/sessions`、`POST /api/audit`、`GET 
 
 > ⚠️ 服务无鉴权，只绑定 `127.0.0.1`，不要暴露到公网。
 
+### 板块解读
+
+报告每个板块标题旁都有个 `?`，点开浮层有同样的说明。判定是判断还是事实、证据在哪里核对，看这张表：
+
+| 板块 | 是什么 | 怎么读 |
+|---|---|---|
+| **summary** | 本次审计的硬数字 | 轮数、事件数、加载/直读次数、judge 是否可用、耗时。异常的第一道筛查 |
+| **expectations** | 按路由规则该被消费的 skill 清单 | `loaded` = 经 Skill 工具正式加载；`file-read` = SKILL.md 被当文件读过（kimi-code 下是绕过机制，codex 下是正规方式，**harness 相对**）；`missing` = 都没有，路由没走的第一信号 |
+| **findings** | 本该触发却从未加载的 skill | 判定是 LLM 反事实推理（**判断**）；证据是从会话原文的逐字引用（**可核对的事实**）。无证据或证据非原文的判定被丢弃计为工具缺陷——缺陷多时先怀疑解析器，别急着怀疑 agent |
+| **instruction following** | 所选 playbook 每个编号步骤的执行判定 | `covered` = 轨迹里有实际行动/结果；`partial` = 做了一部分；`skipped` = 未执行。**带 skip 理由也计 skipped**——这轴度量步骤执行度，不度量裁量合规（那看 expectations）。覆盖率由判定重算，不信模型自报 |
+| **skill lifecycle** | 每次加载/直读的完整记录 | 展开可见**加载时捕获的内容快照**（之后 skill 文件改了也不影响本报告）；`evicted?` = 压缩后可能被挤出上下文（**推断**，日志从不记录这件事） |
+| **event feed** | 原始事件流（最近 400 条） | 角色 badge：`user` 人的输入、`think` 模型思考、`say` 模型回复、`tool` 调用、`result` 返回、`compact` 压缩；`[subagent:x]` 表示来自子代理 |
+
 ---
 
 ## CLI 参数

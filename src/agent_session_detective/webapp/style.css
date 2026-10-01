@@ -212,6 +212,60 @@ blockquote {
 .never-ship { margin-top: 10px; font-size: 12px; color: var(--dim); }
 .never-ship code { color: var(--bad); }
 
+/* help dots: floating explainers, one open at a time */
+.help-wrap {
+  position: relative;
+  display: inline-block;
+  margin-left: 6px;
+  vertical-align: 1px;
+}
+.help-dot {
+  width: 15px; height: 15px;
+  padding: 0;
+  font: 700 10px/15px ui-monospace, Menlo, monospace;
+  text-align: center;
+  color: var(--dim);
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  cursor: pointer;
+  transition: color var(--dur-press) var(--ease-out),
+              border-color var(--dur-press) var(--ease-out),
+              transform var(--dur-press) var(--ease-out);
+}
+.help-dot:hover { color: var(--accent); border-color: var(--accent); }
+.help-dot:active { transform: scale(0.9); }
+.help-pop {
+  display: none;
+  position: absolute;
+  left: -10px; top: 22px;
+  z-index: 30;
+  width: 320px;
+  max-width: 78vw;
+  padding: 10px 12px;
+  background: var(--surface-2);
+  border: 1px solid #34343c;
+  border-radius: 10px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+  font-size: 12px;
+  line-height: 1.65;
+  color: var(--text);
+  white-space: normal;
+  text-align: left;
+  text-transform: none;
+  letter-spacing: normal;
+  font-weight: 400;
+  cursor: default;
+}
+.help-wrap.open .help-pop {
+  display: block;
+  animation: pop-in var(--dur-pop) var(--ease-out) both;
+}
+@keyframes pop-in {
+  from { opacity: 0; transform: translateY(-3px) scale(0.98); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
 @media (max-width: 720px) {
   .event-ts { width: auto; }
   .event-row { flex-direction: column; gap: 0; }

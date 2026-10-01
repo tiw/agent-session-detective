@@ -31,16 +31,16 @@
     </div>
 
     <form class="audit-form" id="audit-form">
-      <label>expect skills <span class="dim">comma separated</span>
+      <label>expect skills <span class="help-wrap"><button class="help-dot" type="button" data-help="expect">?</button><div class="help-pop"></div></span> <span class="dim">comma separated</span>
         <input name="expect" placeholder="Poteto Mode, how, why">
       </label>
-      <label>playbook <span class="dim">instruction following</span>
+      <label>playbook <span class="help-wrap"><button class="help-dot" type="button" data-help="playbook">?</button><div class="help-pop"></div></span> <span class="dim">instruction following</span>
         <select name="playbook">
           <option value="">none</option>
         </select>
       </label>
       <label class="check">
-        <input type="checkbox" name="judge"> judge missed triggers
+        <input type="checkbox" name="judge"> judge missed triggers <span class="help-wrap"><button class="help-dot" type="button" data-help="judge">?</button><div class="help-pop"></div></span>
         <span class="dim">(deepseek, ~10 min)</span>
       </label>
       <button class="btn primary" type="submit">run audit</button>
