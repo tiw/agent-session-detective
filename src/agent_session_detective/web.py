@@ -196,8 +196,48 @@ class Job:
         self.status = "queued"
         self.result: Optional[dict] = None
         self.error: Optional[str] = None
+        self.steps: List[str] = []
         self.started_at: Optional[float] = None
         self.finished_at: Optional[float] = None
+
+    def mark(self, text: str) -> None:
+        self.steps.append(text)
+
+
+def suggest_next_steps(
+    timeline: Timeline,
+    expectations: List[dict],
+    judgments: List[Judgment],
+    if_results: List[IFResult],
+    judge_enabled: bool,
+) -> List[str]:
+    """1-3 derived next actions, per the delivery checklist: summary plus
+    suggested follow-ups, not just a wall of results."""
+    out: List[str] = []
+    missing = [e["name"] for e in expectations if e["status"] == "missing"]
+    if missing:
+        out.append("检查缺失 skill 是否安装或注册: %s" % ", ".join(missing[:3]))
+    failed_if = [r for r in if_results if not r.passed and not r.not_applicable]
+    if failed_if:
+        out.append(
+            "IF 未过门槛 (%s): 展开 skipped/partial 步骤核对是裁量还是遗漏"
+            % ", ".join("%.2f" % r.coverage for r in failed_if)
+        )
+    defects = [j for j in judgments if j.error]
+    if defects:
+        out.append("%d 条判定被丢弃为工具缺陷: 先怀疑解析器，别急着怀疑 agent" % len(defects))
+    if len(timeline.file_reads) >= 3:
+        out.append(
+            "%d 次 SKILL.md 直读: 确认该 harness 下是否为正规加载方式（点板块旁的 ? 查看语义）"
+            % len(timeline.file_reads)
+        )
+    if not timeline.loads and not timeline.file_reads:
+        out.append("未检测到任何 skill 消费: 可能是本会话确实没用 skill，也可能是解析器缺口")
+    if not judge_enabled:
+        out.append("missed-trigger 判定未启用: 配置 ASD_JUDGE_API_KEY / ASD_JUDGE_MODEL 后重跑")
+    if not out:
+        out.append("在已配置的判定范围内未见异常: 扩大 --expect 清单或开启 judge 覆盖更多路由")
+    return out[:3]
 
 
 JOBS: Dict[str, Job] = {}
@@ -208,20 +248,27 @@ def run_audit(job: Job) -> None:
     job.status = "running"
     job.started_at = time.time()
     try:
+        job.mark("parsing wire.jsonl")
         session = load_session(Path(job.params["path"]).expanduser())
         if not session.events:
             raise ValueError("no events parsed")
+        job.mark("building fact timeline (%d events)" % len(session.events))
         timeline = build_timeline(session)
+        job.mark("loading skill catalog")
         catalog = load_catalog()
         judge = Judge.from_env()
         judgments: List[Judgment] = []
         judge_enabled = judge is not None
         if judge_enabled and job.params.get("judge_triggers"):
+            unconsumed = max(len(catalog) - len(timeline.consumed_skill_names()), 0)
+            job.mark("judging %d unconsumed skills (%s)" % (unconsumed, judge.model))
             judgments = judge_session(timeline, catalog, judge)
         if_results: List[IFResult] = []
         if judge_enabled and job.params.get("steps"):
             for playbook in job.params["steps"]:
+                job.mark("evaluating instruction following: %s" % Path(playbook).name)
                 if_results.append(evaluate_playbook(judge, Path(playbook), session))
+        job.mark("deriving next steps")
         expected = job.params.get("expect") or []
         consumed = {n.lower() for n in timeline.consumed_skill_names()}
         expectations = [
@@ -258,12 +305,17 @@ def run_audit(job: Job) -> None:
             "judge_enabled": judge_enabled,
             "catalog_size": len(catalog),
             "status_line": status_line,
+            "suggestions": suggest_next_steps(
+                timeline, expectations, judgments, if_results, judge_enabled
+            ),
             "duration_s": round(time.time() - job.started_at, 1),
         }
+        job.mark("done in %.1fs" % (time.time() - job.started_at))
         job.status = "done"
     except Exception as exc:
         job.status = "error"
         job.error = str(exc)
+        job.mark("failed: %s" % exc)
     finally:
         job.finished_at = time.time()
 
@@ -324,7 +376,7 @@ class Handler(BaseHTTPRequestHandler):
             if not job:
                 self._send_json(404, {"error": "no such job"})
                 return
-            payload = {"id": job.id, "status": job.status, "error": job.error}
+            payload = {"id": job.id, "status": job.status, "error": job.error, "steps": job.steps}
             if job.status == "done":
                 payload["result"] = job.result
             self._send_json(200, payload)

@@ -47,10 +47,28 @@ body {
 
 main { max-width: 1080px; margin: 0 auto; padding: 24px; }
 
-.section-head {
-  display: flex; align-items: center; gap: 14px;
-  margin: 18px 0 14px;
+/* layout: sessions stay visible on the left, audit on the right */
+.layout {
+  display: grid;
+  grid-template-columns: 300px 1fr;
+  gap: 24px;
+  max-width: 1440px;
+  margin: 0 auto;
+  padding: 0 24px 48px;
 }
+.sidebar { min-width: 0; }
+.sidebar-head {
+  display: flex; align-items: center; justify-content: space-between;
+  margin: 18px 0 12px;
+}
+.sidebar .session-list { max-height: calc(100vh - 160px); overflow-y: auto; padding-right: 4px; }
+.main { min-width: 0; padding: 0; max-width: none; margin: 0; }
+.main-head { margin: 18px 0 14px; }
+.btn.small { padding: 3px 10px; font-size: 12px; }
+
+.session-row.active { border-color: var(--accent); }
+.session-row.active .session-id { color: var(--accent); }
+
 h1 { font-size: 15px; margin: 0; text-transform: lowercase; letter-spacing: 0.08em; color: var(--dim); font-weight: 600; }
 
 .dim { color: var(--dim); }
@@ -93,7 +111,45 @@ h1 { font-size: 15px; margin: 0; text-transform: lowercase; letter-spacing: 0.08
   to   { opacity: 1; transform: translateY(0); }
 }
 .session-path { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.session-meta { grid-column: 1 / -1; display: flex; gap: 14px; flex-wrap: wrap; font-size: 12px; color: var(--dim); }
+.session-id { font-size: 11px; color: var(--dim); }
+.session-meta { grid-column: 1 / -1; display: flex; gap: 8px; flex-wrap: wrap; font-size: 12px; color: var(--dim); }
+
+/* template chips: one-line intent, no questionnaire */
+.chips { display: flex; align-items: center; gap: 8px; flex: 0 0 100%; }
+.chip {
+  font: inherit; font-size: 12px;
+  color: var(--accent);
+  background: transparent;
+  border: 1px solid rgba(245, 165, 36, 0.4);
+  border-radius: 999px;
+  padding: 2px 12px;
+  cursor: pointer;
+  transition: transform var(--dur-press) var(--ease-out), background var(--dur-press) var(--ease-out);
+}
+.chip:hover { background: rgba(245, 165, 36, 0.1); }
+.chip:active { transform: scale(0.97); }
+.chip.ghost { color: var(--dim); border-color: var(--line); }
+
+/* narrative progress: recent 3 steps + folded history, breathing last step */
+.steps { display: flex; flex-direction: column; gap: 2px; font-size: 12px; color: var(--dim); }
+.step { padding: 2px 0 2px 14px; border-left: 2px solid var(--line); }
+.step-history { border-left: 2px solid var(--line); padding-left: 14px; }
+.step-history summary { font-size: 11px; color: var(--dim); cursor: pointer; }
+.step.active {
+  color: var(--text);
+  border-left-color: var(--accent);
+  animation: breathe 1.6s var(--ease-out) infinite alternate;
+}
+@keyframes breathe { from { opacity: 0.55; } to { opacity: 1; } }
+
+/* next steps: 1-3 derived follow-ups */
+.suggestions { margin: 0; padding-left: 20px; }
+.suggestions li { margin: 4px 0; }
+
+@media (max-width: 900px) {
+  .layout { grid-template-columns: 1fr; }
+  .sidebar .session-list { max-height: 320px; }
+}
 
 /* badges: hard numbers */
 .badge {
@@ -113,13 +169,14 @@ h1 { font-size: 15px; margin: 0; text-transform: lowercase; letter-spacing: 0.08
 
 /* audit form */
 .audit-form {
-  display: flex; flex-wrap: wrap; gap: 14px; align-items: flex-end;
+  display: flex; flex-direction: column; gap: 12px;
   padding: 16px;
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: 10px;
   margin-bottom: 18px;
 }
+.form-row { display: flex; flex-wrap: wrap; gap: 14px; align-items: flex-end; }
 .audit-form label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--dim); flex: 1 1 220px; }
 .audit-form label.check { flex-direction: row; align-items: center; gap: 8px; flex: 0 0 auto; padding-bottom: 8px; }
 .label-row { display: inline-flex; align-items: center; gap: 2px; }
@@ -140,16 +197,8 @@ h1 { font-size: 15px; margin: 0; text-transform: lowercase; letter-spacing: 0.08
 }
 .audit-form input:focus, .audit-form select:focus { outline: none; border-color: var(--accent); }
 
-/* progress: drawer easing, the one long animation */
+/* progress: narrative steps, no bar */
 .progress { margin: 10px 0 18px; }
-.progress-bar { height: 3px; background: var(--surface-2); border-radius: 2px; overflow: hidden; }
-.progress-fill {
-  height: 100%; width: 30%;
-  background: var(--accent);
-  border-radius: 2px;
-  animation: slide var(--dur-modal) var(--ease-drawer) infinite alternate;
-}
-@keyframes slide { from { margin-left: 0; } to { margin-left: 70%; } }
 
 /* report sections */
 #report section {
