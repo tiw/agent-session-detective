@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>agent session detective</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">agent&nbsp;session&nbsp;detective</div>
+  <div class="statusline" id="status-line">initializing</div>
+</header>
+
+<main>
+  <!-- session list -->
+  <section id="view-sessions">
+    <div class="section-head">
+      <h1>sessions</h1>
+      <button class="btn" id="refresh" type="button">rescan</button>
+    </div>
+    <div class="session-list" id="session-list"></div>
+  </section>
+
+  <!-- audit form + report -->
+  <section id="view-audit" hidden>
+    <div class="section-head">
+      <button class="btn" id="back" type="button">&larr; sessions</button>
+      <h1 id="audit-title">audit</h1>
+    </div>
+
+    <form class="audit-form" id="audit-form">
+      <label>expect skills <span class="dim">comma separated</span>
+        <input name="expect" placeholder="Poteto Mode, how, why">
+      </label>
+      <label>playbook <span class="dim">instruction following</span>
+        <select name="playbook">
+          <option value="">none</option>
+        </select>
+      </label>
+      <label class="check">
+        <input type="checkbox" name="judge"> judge missed triggers
+        <span class="dim">(deepseek, ~10 min)</span>
+      </label>
+      <button class="btn primary" type="submit">run audit</button>
+    </form>
+
+    <div class="progress" id="progress" hidden>
+      <div class="progress-bar"><div class="progress-fill" id="progress-fill"></div></div>
+      <div class="dim" id="progress-text">queued</div>
+    </div>
+
+    <div id="report"></div>
+  </section>
+</main>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

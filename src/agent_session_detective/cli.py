@@ -51,7 +51,14 @@ def main(argv=None) -> int:
     parser.add_argument("--gate", type=float, default=None,
                         help="CI gate: exit non-zero when IF coverage is below this (default 0.75 "
                              "when --steps is set) or when an --expect skill is missing.")
+    parser.add_argument("--serve", action="store_true", help="Run the web app on localhost.")
+    parser.add_argument("--port", type=int, default=8471, help="Port for --serve (default 8471).")
     args = parser.parse_args(argv)
+
+    if args.serve:
+        from .web import serve
+        serve(args.port)
+        return 0
 
     session_dir = Path(args.session).expanduser() if args.session else find_latest_session(
         Path(args.sessions_root).expanduser()
