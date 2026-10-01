@@ -223,7 +223,7 @@
   function renderReport(r) {
     var parts = [];
     parts.push(
-      "<section><h2>summary</h2>" + helpDot("summary") + "<div class='session-meta'>" +
+      "<section><h2>summary " + helpDot("summary") + "</h2>" + "<div class='session-meta'>" +
       badge("dim", "turns " + r.session.turns) +
       badge("dim", "events " + r.session.events) +
       badge("fact", "loaded " + r.timeline.loads.length) +
@@ -238,7 +238,7 @@
         var cls = e.status === "loaded" ? "ok" : e.status === "file-read" ? "warn" : "bad";
         return "<tr><td>" + esc(e.name) + "</td><td>" + badge(cls, e.status) + "</td></tr>";
       }).join("");
-      parts.push("<section><h2>expectations</h2>" + helpDot("expect") + "<table><tr><th>skill</th><th>status</th></tr>" + rows + "</table></section>");
+      parts.push("<section><h2>expectations " + helpDot("expect") + "</h2>" + "<table><tr><th>skill</th><th>status</th></tr>" + rows + "</table></section>");
     }
 
     var missed = r.judgments.missed;
@@ -253,13 +253,13 @@
       if (r.judgments.errors.length) {
         body += '<p class="dim">defects: ' + esc(r.judgments.errors.join(" · ")) + "</p>";
       }
-      parts.push("<section><h2>findings</h2>" + helpDot("findings") + "" + body + "</section>");
+      parts.push("<section><h2>findings " + helpDot("findings") + "</h2>" + "" + body + "</section>");
     }
 
     if (r.if_results.length) {
       r.if_results.forEach(function (res) {
         if (res.not_applicable) {
-          parts.push("<section><h2>instruction following</h2>" + helpDot("if") + "<p class='dim'>" + esc(res.playbook) + ": no enumerable steps, n/a.</p></section>");
+          parts.push("<section><h2>instruction following " + helpDot("if") + "</h2>" + "<p class='dim'>" + esc(res.playbook) + ": no enumerable steps, n/a.</p></section>");
           return;
         }
         var cls = res.passed ? "ok" : "bad";
@@ -269,7 +269,7 @@
             badge(vcls, v.status) + "</td><td>" + esc((v.evidence || v.rationale || "").slice(0, 140)) + "</td></tr>";
         }).join("");
         parts.push(
-          "<section><h2>instruction following · " + esc(res.playbook) + "</h2>" + helpDot("if") +
+          "<section><h2>instruction following · " + esc(res.playbook) + " " + helpDot("if") + "</h2>" +
           "<p>" + badge(cls, res.coverage.toFixed(2) + " / gate " + res.gate.toFixed(2)) + "</p>" +
           "<table><tr><th>#</th><th>step</th><th>status</th><th>evidence</th></tr>" + vrows + "</table></section>"
         );
@@ -287,7 +287,7 @@
         return "<details><summary>" + badge("warn", "file-read") + " " + esc(f.skill_name) +
           " <span class='dim'>" + esc(f.origin) + "</span></summary><pre>" + esc(f.snippet_head) + "</pre></details>";
       }).join("");
-      parts.push("<section><h2>skill lifecycle</h2>" + helpDot("lifecycle") + "" + (items || '<p class="dim">none detected.</p>') + "</section>");
+      parts.push("<section><h2>skill lifecycle " + helpDot("lifecycle") + "</h2>" + "" + (items || '<p class="dim">none detected.</p>') + "</section>");
     }
 
     var KIND_CLS = { user: "user", think: "think", say: "say", tool: "tool",
@@ -298,7 +298,7 @@
       return '<div class="event-row"><div class="event-ts">' + esc(fmtTs(e.ts)) + "</div><div>" +
         kind + " " + esc(e.text) + origin + "</div></div>";
     }).join("");
-    parts.push("<section><h2>event feed</h2>" + helpDot("feed") + "<div class='event-feed'>" + feed + "</div>" +
+    parts.push("<section><h2>event feed " + helpDot("feed") + "</h2>" + "<div class='event-feed'>" + feed + "</div>" +
       '<div class="never-ship">never ship: judgments without verbatim evidence · ' +
       "plans counted as actions · model-reported arithmetic</div></section>");
 
