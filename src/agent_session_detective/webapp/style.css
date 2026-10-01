@@ -122,6 +122,14 @@ h1 { font-size: 15px; margin: 0; text-transform: lowercase; letter-spacing: 0.08
 }
 .audit-form label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--dim); flex: 1 1 220px; }
 .audit-form label.check { flex-direction: row; align-items: center; gap: 8px; flex: 0 0 auto; padding-bottom: 8px; }
+.label-row { display: inline-flex; align-items: center; gap: 2px; }
+
+/* report headings: keep the help dot glued to the title text */
+#report h2 {
+  font-size: 12px; text-transform: lowercase; letter-spacing: 0.1em;
+  color: var(--dim); margin: 0 0 12px; font-weight: 600;
+  display: flex; align-items: baseline; gap: 2px; flex-wrap: wrap;
+}
 .audit-form input[type="text"], .audit-form input:not([type]), .audit-form select {
   font: inherit; color: var(--text);
   background: var(--bg);
@@ -151,10 +159,6 @@ h1 { font-size: 15px; margin: 0; text-transform: lowercase; letter-spacing: 0.08
   padding: 16px 18px;
   margin-bottom: 14px;
   animation: row-in var(--dur-pop) var(--ease-out) both;
-}
-#report h2 {
-  font-size: 12px; text-transform: lowercase; letter-spacing: 0.1em;
-  color: var(--dim); margin: 0 0 12px; font-weight: 600;
 }
 
 table { border-collapse: collapse; width: 100%; font-size: 12.5px; }
