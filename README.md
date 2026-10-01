@@ -111,6 +111,26 @@ asd <会话目录> --expect "Poteto Mode,bug-fix,tdd" --gate 0.75 || echo "路�
 
 ---
 
+## Web 界面
+
+`--serve` 在本地起一个 Web 应用，浏览器里扫描会话、配置并运行审计、看报告：
+
+```bash
+PYTHONPATH=src python3 -m agent_session_detective --serve          # http://127.0.0.1:8471
+PYTHONPATH=src python3 -m agent_session_detective --serve --port 9000
+```
+
+- **会话列表**：扫描 `~/.kimi-code/sessions` 和 `~/.kimi/sessions` 两个根目录，显示轮数、事件数、skill 加载/直读计数
+- **审计表单**：填 `--expect` 清单、选 playbook 做 IF 评估、勾选是否跑 missed-trigger 判定（LLM 部分后台线程执行，页面轮询进度）
+- **报告渲染**：expectations 核对表、findings、IF 逐步判定、skill 生命周期、事件流，与 CLI 版同一套数据形状
+- **事件流角色 badge**：每条事件标注 `user` / `think` / `say` / `tool` / `result` / `compact`，人的输入、模型思考、模型回复、工具 traffic 一眼分开
+
+JSON API 也可以独立使用（`GET /api/sessions`、`POST /api/audit`、`GET /api/job/<id>`、`GET /api/playbooks`），方便接进自己的工具链。
+
+> ⚠️ 服务无鉴权，只绑定 `127.0.0.1`，不要暴露到公网。
+
+---
+
 ## CLI 参数
 
 | 参数 | 说明 |
@@ -125,6 +145,8 @@ asd <会话目录> --expect "Poteto Mode,bug-fix,tdd" --gate 0.75 || echo "路�
 | `--judge-limit` | 只判断前 N 个未消费的 skill |
 | `--steps` | 待评估的 playbook 文件，可重复（需要 judge） |
 | `--gate` | CI 门槛；配合 `--steps` / `--expect` 决定退出码 |
+| `--serve` | 启动 Web 应用（默认端口 8471） |
+| `--port` | `--serve` 的端口 |
 
 > ⚠️ **默认根目录的坑**：`--sessions-root` 默认是 `~/.kimi/sessions`（CLI 格式日志）。桌面版 kimi-code 的会话在 `~/.kimi-code/sessions/`，需要显式指定：
 > `--sessions-root ~/.kimi-code/sessions`
@@ -186,7 +208,9 @@ skill 展示的是**加载时捕获的内容快照**——所以即使 skill 文
     ├── catalog.py    # 扫描本地 skill 目录，提取触发语料
     ├── judge.py      # 反事实触发判断
     ├── if_eval.py    # 指令遵循度评估（移植自 AWS Skill Eval）
-    └── report.py     # HTML 渲染
+    ├── report.py     # HTML 渲染
+    ├── web.py        # Web 应用：JSON API + 审计任务队列
+    └── webapp/       # 单页 UI（index.html / style.css / app.js）
 ```
 
 skill catalog 从 `~/.agents/skills` 和 `~/.kimi/skills` 扫描，可用 `--skills-dir` 追加。
@@ -201,6 +225,7 @@ skill catalog 从 `~/.agents/skills` 和 `~/.kimi/skills` 扫描，可用 `--ski
 - **"加载了但没遵守"是独立的一条轴**：`--steps` 的分数衡量的是"规定动作执行度"，被 playbook 明文授权、带 `skip: <原因>` 的跳过**仍然计 0 分**。这是有意的——判断遵守度需要 `--steps` 评分和 `--expect` 清单两个轴一起看。
 - **`if_eval` 的步骤解析比较挑格式**：只认顶格的 `N. ` 编号行，缩进续行会被拼接。
 - **`--judge-limit` 按 catalog 顺序截断**，落到哪批 skill 上不稳定。
+- **Web 服务只绑定 localhost、无鉴权**，不适合共享或暴露；审计任务存在内存里，重启即失。
 - 仓库目前**没有自动化测试**。
 
 ---
