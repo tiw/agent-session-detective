@@ -227,10 +227,13 @@
       parts.push("<section><h2>skill lifecycle</h2>" + (items || '<p class="dim">none detected.</p>') + "</section>");
     }
 
+    var KIND_CLS = { user: "user", think: "think", say: "say", tool: "tool",
+                     result: "dim", compact: "bad", status: "dim", sys: "dim" };
     var feed = r.event_feed.map(function (e) {
       var origin = e.origin !== "main" ? ' <span class="event-origin">[' + esc(e.origin) + "]</span>" : "";
+      var kind = '<span class="kind-badge kind-' + (KIND_CLS[e.kind] || "dim") + '">' + esc(e.kind) + "</span>";
       return '<div class="event-row"><div class="event-ts">' + esc(fmtTs(e.ts)) + "</div><div>" +
-        esc(e.text) + origin + "</div></div>";
+        kind + " " + esc(e.text) + origin + "</div></div>";
     }).join("");
     parts.push("<section><h2>event feed</h2><div class='event-feed'>" + feed + "</div>" +
       '<div class="never-ship">never ship: judgments without verbatim evidence · ' +

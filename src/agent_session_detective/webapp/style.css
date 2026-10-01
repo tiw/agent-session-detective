@@ -191,6 +191,23 @@ blockquote {
 .event-ts { color: var(--dim); white-space: nowrap; width: 148px; flex: none; }
 .event-origin { color: var(--accent); font-size: 11px; }
 
+/* role badges: who produced this event */
+.kind-badge {
+  display: inline-block;
+  width: 46px; flex: none;
+  text-align: center;
+  font-size: 10px; line-height: 1.8;
+  border-radius: 4px;
+  border: 1px solid var(--line);
+  color: var(--dim);
+  vertical-align: 1px;
+}
+.kind-user  { color: #131313; background: var(--accent); border-color: var(--accent); font-weight: 700; }
+.kind-think { color: var(--dim); border-style: dashed; }
+.kind-say   { color: var(--fact); border-color: rgba(88, 166, 255, 0.4); }
+.kind-tool  { color: var(--warn); border-color: rgba(245, 165, 36, 0.4); }
+.kind-bad   { color: var(--bad); border-color: rgba(244, 80, 76, 0.4); }
+
 /* never ship: the banned list, rendered as hard stops */
 .never-ship { margin-top: 10px; font-size: 12px; color: var(--dim); }
 .never-ship code { color: var(--bad); }

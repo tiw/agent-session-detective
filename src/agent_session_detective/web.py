@@ -108,11 +108,34 @@ def if_results_to_dict(results: List[IFResult]) -> List[dict]:
     ]
 
 
+def event_kind(event) -> str:
+    """Classify an event by who produced it, for role-distinguished feeds."""
+    if event.type == "TurnBegin":
+        return "user"
+    if event.type == "ContentPart":
+        return "think" if event.payload.get("type") == "think" else "say"
+    if event.type == "ToolCall":
+        return "tool"
+    if event.type == "ToolResult":
+        return "result"
+    if event.type.startswith("Compaction"):
+        return "compact"
+    if event.type == "StatusUpdate":
+        return "status"
+    return "sys"
+
+
 def event_feed_to_list(session: Session, limit: int = 400) -> List[dict]:
     feed = []
     for e in session.events[-limit:]:
         feed.append(
-            {"ts": e.ts, "type": e.type, "origin": e.origin, "text": e.text_preview(limit=160)}
+            {
+                "ts": e.ts,
+                "type": e.type,
+                "kind": event_kind(e),
+                "origin": e.origin,
+                "text": e.text_preview(limit=160),
+            }
         )
     return feed
 
