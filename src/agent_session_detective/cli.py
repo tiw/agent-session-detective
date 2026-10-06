@@ -13,6 +13,7 @@ from .if_eval import IFResult, evaluate_playbook
 from .judge import Judge, judge_session
 from .report import render_report
 from .timeline import build_timeline
+from .tokenstats import build_token_stats
 from .wire import find_latest_session, load_session
 
 DEFAULT_SESSIONS_ROOT = "~/.kimi/sessions"
@@ -100,12 +101,23 @@ def main(argv=None) -> int:
                 evaluate_playbook(judge, Path(playbook), session, gate=args.gate)
             )
 
+    token_stats = build_token_stats(session, timeline)
+    if token_stats.usage_records:
+        hit = "%.1f%%" % (token_stats.cache_hit_rate * 100) if token_stats.cache_hit_rate is not None else "?"
+        print(
+            "tokens: input=%d output=%d cache-hit=%s growth=%s"
+            % (token_stats.input_total, token_stats.output_total, hit, token_stats.growth_verdict),
+            file=sys.stderr,
+        )
+
     report = render_report(
         session, timeline, judgments,
         judge_enabled=judge is not None,
         catalog_size=len(catalog),
         expected=_parse_expected(args.expect),
         if_results=if_results,
+        token_stats=token_stats,
+        no_self_invoke={s.name.lower() for s in catalog if s.disable_model_invocation},
     )
     out_path = Path(args.out) if args.out else session_dir / "skill-audit.html"
     out_path.write_text(report, encoding="utf-8")

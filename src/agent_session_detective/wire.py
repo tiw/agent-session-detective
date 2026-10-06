@@ -51,6 +51,25 @@ class Event:
             return "user: %s" % text[:limit]
         if self.type == "StatusUpdate":
             return "ctx %s tokens" % self.payload.get("context_tokens")
+        if self.type == "UsageRecord":
+            p = self.payload
+            return "usage in=%d out=%d cache=%d" % (
+                (p.get("input_other") or 0) + (p.get("input_cache_read") or 0),
+                p.get("output") or 0,
+                p.get("input_cache_read") or 0,
+            )
+        if self.type == "LLMRequest":
+            h = str(self.payload.get("system_prompt_hash") or "")
+            return "llm.request %s msgs=%s syshash=%s" % (
+                self.payload.get("model"),
+                self.payload.get("message_count"),
+                h[:8],
+            )
+        if self.type == "TurnTokens":
+            return "turn %s ctx=%s tokens" % (
+                self.payload.get("turn_id"),
+                self.payload.get("tokens"),
+            )
         return self.type
 
 
@@ -97,6 +116,34 @@ def _translate_desktop(record: dict) -> Optional[tuple]:
         return "StatusUpdate", {
             "context_tokens": record.get("tokens"),
             "context_usage": None,
+        }
+    if rtype == "token_counting.turn_recorded":
+        if record.get("agentId", "main") != "main":
+            return None
+        return "TurnTokens", {
+            "turn_id": record.get("turnId", 0),
+            "tokens": record.get("tokens", 0),
+        }
+    if rtype == "usage.record":
+        usage = record.get("usage") or {}
+        return "UsageRecord", {
+            "input_other": usage.get("inputOther", 0),
+            "output": usage.get("output", 0),
+            "input_cache_read": usage.get("inputCacheRead", 0),
+            "input_cache_creation": usage.get("inputCacheCreation", 0),
+            "model": record.get("model", ""),
+            "agent_id": record.get("agentId", ""),
+            "usage_scope": record.get("usageScope", ""),
+        }
+    if rtype == "llm.request":
+        return "LLMRequest", {
+            "kind": record.get("kind", ""),
+            "model": record.get("model", ""),
+            "agent_id": record.get("agentId", ""),
+            "system_prompt_hash": record.get("systemPromptHash", ""),
+            "tools_hash": record.get("toolsHash", ""),
+            "message_count": record.get("messageCount", 0),
+            "turn_step": record.get("turnStep", ""),
         }
     if isinstance(rtype, str) and "compact" in rtype.lower():
         return "CompactionBegin" if "begin" in rtype.lower() or "start" in rtype.lower() else "CompactionEnd", {}
@@ -176,5 +223,6 @@ def find_latest_session(base: Path) -> Optional[Path]:
     if not wires:
         return None
     newest = max(wires, key=lambda p: p.stat().st_mtime)
-    # Session dir is the parent of the wire, or two levels up in the agents layout.
-    return newest.parent.parent if newest.parent.name in ("main", "agent") else newest.parent
+    # CLI layout: <root>/<ws>/<session>/wire.jsonl — session is the wire's parent.
+    # Agents layout: <root>/<ws>/<session>/agents/main/wire.jsonl — three levels up.
+    return newest.parents[2] if newest.parent.name in ("main", "agent") else newest.parent

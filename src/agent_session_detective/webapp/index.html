@@ -18,8 +18,12 @@
   <aside class="sidebar">
     <div class="sidebar-head">
       <h1>sessions</h1>
-      <button class="btn small" id="refresh" type="button">rescan</button>
+      <div>
+        <button class="btn small" id="fleet-btn" type="button" title="跨会话聚合，需要解析全部日志，约 10 秒">fleet</button>
+        <button class="btn small" id="refresh" type="button">rescan</button>
+      </div>
     </div>
+    <div class="fleet" id="fleet" hidden></div>
     <div class="session-list" id="session-list"></div>
   </aside>
 

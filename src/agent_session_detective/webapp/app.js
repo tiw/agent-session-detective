@@ -45,7 +45,12 @@
     "feed":
       "原始事件流，最近 400 条，按时间排序。角色 badge：user = 人的输入，think = 模型思考，" +
       "say = 模型给你的回复，tool = 工具调用，result = 工具返回，compact = 上下文压缩。" +
-      "[subagent:x] 标记表示事件来自子代理。"
+      "[subagent:x] 标记表示事件来自子代理。",
+    "tokens":
+      "token 治理四指标，全部从日志确定性抽取：缓存命中率（usage.record / token_usage，" +
+      "全 agent 合计）；每轮增量形状（linear = 每轮加恒定 token，sublinear = 增量在缩，" +
+      "accelerating = 增量在涨）；四桶分解（system 桶是残差推断，其余是按事件内容估的）；" +
+      "prompt 哈希翻转（llm.request 的 systemPromptHash/toolsHash 中途变化 = 前缀缓存失效）。"
   };
 
   var TEMPLATES = {
@@ -137,6 +142,10 @@
   function loadSessions() {
     setStatus("scanning sessions…");
     fetch("/api/sessions").then(function (r) { return r.json(); }).then(function (data) {
+      // sidebar is discovery-only: turns/skills/token stats are computed
+      // on demand by the audit job, not here. fleet stays hidden until
+      // the fleet button asks for it.
+      document.getElementById("fleet").hidden = true;
       sessionList.innerHTML = "";
       data.sessions.forEach(function (s, i) {
         var el = document.createElement("div");
@@ -147,18 +156,46 @@
           '<div class="session-path">' + esc(s.workspace.replace(/^wd_/, "")) + "</div>" +
           '<div class="session-id">' + esc(s.id.slice(0, 8)) + "</div>" +
           '<div class="session-meta">' +
-          badge("dim", (s.turns == null ? "?" : s.turns) + " turns") +
-          badge("fact", (s.skills_loaded == null ? "?" : s.skills_loaded) + " loaded") +
-          badge(s.skill_files_read ? "warn" : "dim", (s.skill_files_read == null ? "?" : s.skill_files_read) + " read") +
+          badge("dim", fmtTs(s.mtime).slice(5, 16)) +
           (s.cached ? badge("ok", "audited") : "") +
           "</div>";
         el.addEventListener("click", function () { openAudit(s, el); });
         sessionList.appendChild(el);
       });
-      setStatus(data.sessions.length + " sessions. pick one.");
+      setStatus(data.sessions.length + " recent sessions (of " + (data.total || data.sessions.length) + "). pick one.");
     }).catch(function (e) {
       setStatus("error: " + e.message);
     });
+  }
+
+  document.getElementById("fleet-btn").addEventListener("click", function () {
+    setStatus("computing fleet stats over all sessions (parses every log)…");
+    fetch("/api/fleet").then(function (r) { return r.json(); }).then(function (data) {
+      renderFleet(data.fleet);
+      var f = data.fleet || {};
+      setStatus("fleet: " + f.sessions + " sessions parsed");
+    }).catch(function (e) {
+      setStatus("error: " + e.message);
+    });
+  });
+
+  function renderFleet(fleet) {
+    var box = document.getElementById("fleet");
+    if (!fleet || !fleet.sessions) { box.hidden = true; return; }
+    box.hidden = false;
+    var shapes = Object.keys(fleet.growth_shapes || {}).map(function (k) {
+      return badge("dim", k + "×" + fleet.growth_shapes[k]);
+    }).join("");
+    box.innerHTML =
+      badge("dim", fleet.sessions + " sessions") +
+      badge("dim", "avg " + fleet.avg_turns + " turns") +
+      (fleet.avg_cache_hit_rate != null
+        ? badge(fleet.avg_cache_hit_rate >= 0.5 ? "ok" : "warn",
+                "avg cache " + Math.round(fleet.avg_cache_hit_rate * 100) + "% (" + fleet.with_usage + " with usage)")
+        : badge("dim", "no usage data")) +
+      '<span class="dim" style="flex-basis:100%">growth</span>' + shapes +
+      badge(fleet.total_repeat_extra_tokens >= 5000 ? "warn" : "dim",
+            "repeat +" + fleet.total_repeat_extra_tokens);
   }
 
   // ------------------------------------------------------------------
@@ -324,6 +361,88 @@
   // report rendering
   // ------------------------------------------------------------------
 
+  function renderTokenStats(t) {
+    if (!t) return "";
+    var parts = [];
+    var badges = [];
+    if (t.usage_record_count) {
+      badges.push(badge("fact", "cache hit " + (t.cache_hit_rate != null
+        ? Math.round(t.cache_hit_rate * 100) + "%" : "?")));
+      badges.push(badge("dim", "input billed " + t.input_total));
+      badges.push(badge("dim", "output " + t.output_total));
+    } else {
+      badges.push(badge("dim", "no usage records"));
+    }
+    var vcls = t.growth_verdict.indexOf("sublinear") === 0 ? "ok"
+      : t.growth_verdict.indexOf("insufficient") === 0 ? "dim" : "bad";
+    badges.push(badge(vcls, "growth: " + t.growth_verdict));
+    if (t.hash_runs && t.hash_runs.length) {
+      badges.push(badge(t.hash_flips ? "bad" : "ok", "prompt flips " + t.hash_flips));
+    }
+    if (t.repeats && t.repeats.length) {
+      badges.push(badge("warn", "repeat injection ~" + t.repeat_extra_tokens + " tok"));
+    }
+    parts.push("<div class='session-meta'>" + badges.join("") + "</div>");
+
+    if (t.bucket_shares && Object.keys(t.bucket_shares).length) {
+      var order = ["system", "history", "injected", "output"];
+      var rows = order.map(function (k) {
+        return "<tr><td>" + esc(k) + (k === "system" ? "（残差，推断）" : "") + "</td><td>" +
+          (t.bucket_totals[k] || 0) + "</td><td>" +
+          Math.round((t.bucket_shares[k] || 0) * 100) + "%</td></tr>";
+      }).join("");
+      parts.push("<table><tr><th>bucket</th><th>tokens added</th><th>share</th></tr>" + rows + "</table>");
+      var grew = (t.turn_growth || []).filter(function (r) {
+        return r.added != null && r.added >= 0 && !r.crossed_compaction;
+      });
+      if (grew.length) {
+        var maxAdded = Math.max.apply(null, grew.map(function (r) { return r.added; })) || 1;
+        var bars = grew.map(function (r) {
+          var observed = r.system_added + r.history_added + r.injected_added + r.output_added;
+          var scale = observed ? Math.min(1, r.added / observed) : 1;
+          var segs = order.map(function (k) {
+            var v = (r[k + "_added"] || 0) * scale;
+            return v > 0 ? '<span class="bar-seg seg-' + k + '" style="height:' +
+              Math.max(2, Math.round(v / maxAdded * 56)) + 'px"></span>' : "";
+          }).join("");
+          return '<div class="bar" title="T' + r.turn + " +" + r.added + '">' + segs + "</div>";
+        }).join("");
+        var legend = order.map(function (k) {
+          return '<span><span class="seg-' + k + '"></span>' + esc(k) + "</span>";
+        }).join("");
+        parts.push('<div class="bar-chart">' + bars + '</div>');
+        parts.push('<div class="bar-legend">' + legend +
+          '<span class="dim">system 为残差推断 · 被压缩跨越的轮次已剔除</span></div>');
+      }
+    }
+
+    if (t.hash_runs && t.hash_runs.length) {
+      var hrows = t.hash_runs.map(function (run) {
+        return "<tr><td>" + esc(run.kind) + "</td><td><code>" + esc(run.hash) + "</code></td><td>" +
+          run.requests + "</td><td>" + esc(fmtTs(run.first_ts)) + "</td><td>" +
+          esc(fmtTs(run.last_ts)) + "</td></tr>";
+      }).join("");
+      parts.push("<table><tr><th>kind</th><th>hash</th><th>requests</th><th>first</th><th>last</th></tr>" +
+        hrows + "</table>");
+      if (t.hash_flips) {
+        parts.push('<p class="dim">哈希翻转 ' + t.hash_flips +
+          ' 次（日志事实）：每次翻转使 provider 前缀缓存失效、重付 prefill。</p>');
+      }
+    }
+
+    if (t.repeats && t.repeats.length) {
+      var rrows = t.repeats.map(function (r) {
+        return "<tr><td>" + r.occurrences + "×</td><td>~" + r.tokens_each + "</td><td>~" +
+          r.extra_tokens + '</td><td class="dim">' + esc(r.preview.slice(0, 100)) + "</td></tr>";
+      }).join("");
+      parts.push("<details><summary>" + badge("warn", "repeat injection") + " " + t.repeats.length +
+        " 组 · ~" + t.repeat_extra_tokens + " extra tokens</summary>" +
+        "<table><tr><th>次数</th><th>每次~tokens</th><th>多付</th><th>内容</th></tr>" + rrows + "</table>" +
+        '<p class="dim">同一份工具结果（≥200 字符）被多次读入 = 状态未外置的可见信号。</p></details>');
+    }
+    return "<section><h2>token governance " + helpDot("tokens") + "</h2>" + parts.join("") + "</section>";
+  }
+
   function renderReport(r) {
     var parts = [];
     parts.push(
@@ -403,11 +522,16 @@
     }
 
     if (r.timeline.loads.length || r.timeline.file_reads.length) {
+      var noSelf = {};
+      (r.no_self_invoke || []).forEach(function (n) { noSelf[n.toLowerCase()] = true; });
       var items = r.timeline.loads.map(function (l) {
+        var ns = noSelf[l.skill_name.toLowerCase()]
+          ? " " + badge("warn", "disable-model-invocation: 无法从日志区分点名/自调，需对照路由规则核对")
+          : "";
         return "<details><summary>" + badge("fact", "loaded") + " " + esc(l.skill_name) +
           " <span class='dim'>" + esc(fmtTs(l.ts)) + " · ~" + l.tokens_est + " tokens" +
           (l.evicted_by != null ? " · evicted?" : "") + "</span></summary>" +
-          "<pre>" + esc(l.content_head) + "</pre></details>";
+          "<pre>" + esc(l.content_head) + "</pre>" + (ns ? "<p>" + ns + "</p>" : "") + "</details>";
       }).join("");
       items += r.timeline.file_reads.map(function (f) {
         return "<details><summary>" + badge("warn", "file-read") + " " + esc(f.skill_name) +
@@ -415,6 +539,8 @@
       }).join("");
       parts.push("<section><h2>skill lifecycle " + helpDot("lifecycle") + "</h2>" + (items || '<p class="dim">none detected.</p>') + "</section>");
     }
+
+    parts.push(renderTokenStats(r.token_stats));
 
     var KIND_CLS = { user: "user", think: "think", say: "say", tool: "tool",
                      result: "dim", compact: "bad", status: "dim", sys: "dim" };

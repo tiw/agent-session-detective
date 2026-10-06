@@ -20,6 +20,7 @@ from .catalog import load_catalog
 from .if_eval import IFResult, evaluate_playbook
 from .judge import Judge, Judgment, judge_session
 from .timeline import Timeline, build_timeline
+from .tokenstats import TokenStats, build_token_stats
 from .wire import Session, find_latest_session, load_session
 
 WEBAPP_DIR = Path(__file__).parent / "webapp"
@@ -153,6 +154,54 @@ def timeline_to_dict(timeline: Timeline) -> dict:
     }
 
 
+def tokenstats_to_dict(s: TokenStats) -> dict:
+    return {
+        "cache_hit_rate": s.cache_hit_rate,
+        "input_total": s.input_total,
+        "output_total": s.output_total,
+        "cache_read_total": s.cache_read_total,
+        "growth_verdict": s.growth_verdict,
+        "turn_growth": [
+            {
+                "turn": r.turn,
+                "context_at_start": r.context_at_start,
+                "exact": r.exact,
+                "added": r.added,
+                "system_added": r.system_added,
+                "history_added": r.history_added,
+                "injected_added": r.injected_added,
+                "output_added": r.output_added,
+                "crossed_compaction": r.crossed_compaction,
+            }
+            for r in s.turn_growth
+        ],
+        "bucket_totals": s.bucket_totals,
+        "bucket_shares": s.bucket_shares,
+        "hash_runs": [
+            {
+                "kind": r.kind,
+                "hash": r.hash[:12],
+                "first_ts": r.first_ts,
+                "last_ts": r.last_ts,
+                "requests": r.requests,
+            }
+            for r in s.hash_runs
+        ],
+        "hash_flips": s.hash_flips,
+        "repeats": [
+            {
+                "preview": r.preview,
+                "occurrences": r.occurrences,
+                "tokens_each": r.tokens_each,
+                "extra_tokens": r.extra_tokens,
+            }
+            for r in s.repeats
+        ],
+        "repeat_extra_tokens": s.repeat_extra_tokens,
+        "usage_record_count": len(s.usage_records),
+    }
+
+
 def judgments_to_dict(judgments: List[Judgment]) -> dict:
     return {
         "missed": [
@@ -227,7 +276,10 @@ def event_feed_to_list(session: Session, limit: int = 400) -> List[dict]:
 # session discovery
 # --------------------------------------------------------------------------
 
-def list_sessions(roots: Optional[List[str]] = None) -> List[dict]:
+def discover_sessions(roots: Optional[List[str]] = None) -> List[dict]:
+    """Stat-level discovery only: no log parsing. Cheap enough to run on
+    every page load; per-session stats are computed on demand when an
+    audit job actually runs."""
     roots = roots or DEFAULT_ROOTS
     found: Dict[str, dict] = {}
     for root in roots:
@@ -254,9 +306,40 @@ def list_sessions(roots: Optional[List[str]] = None) -> List[dict]:
                 "workspace": session_dir.parent.name,
                 "mtime": mtime,
             }
-    sessions = sorted(found.values(), key=lambda s: -s["mtime"])
+    return sorted(found.values(), key=lambda s: -s["mtime"])
+
+
+SIDEBAR_LIMIT = 10
+
+
+def list_sessions(roots: Optional[List[str]] = None) -> dict:
+    """The most recent sessions for the sidebar. Parsing a session's log is
+    deferred to the audit job; this endpoint must stay instant."""
     audited = cached_paths()
+    all_sessions = discover_sessions(roots)
+    sessions = all_sessions[:SIDEBAR_LIMIT]
     for s in sessions:
+        s["cached"] = s["path"] in audited
+    return {"sessions": sessions, "total": len(all_sessions), "fleet": None}
+
+
+def fleet_stats(roots: Optional[List[str]] = None) -> Dict[str, object]:
+    """Cross-session aggregation, on demand: parses every discovered
+    session's log, so the caller should treat this as a slow operation
+    (the UI shows progress while it runs)."""
+    audited = cached_paths()
+    fleet: Dict[str, object] = {
+        "sessions": 0,
+        "with_usage": 0,
+        "avg_turns": None,
+        "avg_cache_hit_rate": None,
+        "growth_shapes": {},
+        "total_output_tokens": 0,
+        "total_repeat_extra_tokens": 0,
+    }
+    turns_sum = 0
+    hit_sum = 0.0
+    for s in discover_sessions(roots):
         s["cached"] = s["path"] in audited
         try:
             session = load_session(Path(s["path"]))
@@ -265,9 +348,31 @@ def list_sessions(roots: Optional[List[str]] = None) -> List[dict]:
             s["events"] = len(session.events)
             s["skills_loaded"] = len(timeline.loads)
             s["skill_files_read"] = len(timeline.file_reads)
+            stats = build_token_stats(session, timeline)
+            s["cache_hit_rate"] = stats.cache_hit_rate
+            s["growth_verdict"] = stats.growth_verdict
+            s["repeat_extra_tokens"] = stats.repeat_extra_tokens
+            s["output_total"] = stats.output_total
         except Exception:
             s["turns"] = s["events"] = s["skills_loaded"] = s["skill_files_read"] = None
-    return sessions
+            s["cache_hit_rate"] = s["growth_verdict"] = None
+            s["repeat_extra_tokens"] = s["output_total"] = None
+        if s["turns"] is None:
+            continue
+        fleet["sessions"] = fleet["sessions"] + 1
+        turns_sum += s["turns"]
+        shape = (s["growth_verdict"] or "unknown").split(" ")[0]
+        fleet["growth_shapes"][shape] = fleet["growth_shapes"].get(shape, 0) + 1
+        if s["cache_hit_rate"] is not None:
+            fleet["with_usage"] = fleet["with_usage"] + 1
+            hit_sum += s["cache_hit_rate"]
+        fleet["total_output_tokens"] += s["output_total"] or 0
+        fleet["total_repeat_extra_tokens"] += s["repeat_extra_tokens"] or 0
+    if fleet["sessions"]:
+        fleet["avg_turns"] = round(turns_sum / fleet["sessions"], 1)
+    if fleet["with_usage"]:
+        fleet["avg_cache_hit_rate"] = round(hit_sum / fleet["with_usage"], 3)
+    return fleet
 
 
 # --------------------------------------------------------------------------
@@ -295,6 +400,7 @@ def suggest_next_steps(
     judgments: List[Judgment],
     if_results: List[IFResult],
     judge_enabled: bool,
+    token_stats: Optional[TokenStats] = None,
 ) -> List[str]:
     """1-3 derived next actions, per the delivery checklist: summary plus
     suggested follow-ups, not just a wall of results."""
@@ -316,6 +422,24 @@ def suggest_next_steps(
             "%d 次 SKILL.md 直读: 确认该 harness 下是否为正规加载方式（点板块旁的 ? 查看语义）"
             % len(timeline.file_reads)
         )
+    if token_stats is not None:
+        if token_stats.cache_hit_rate is not None and token_stats.cache_hit_rate < 0.5:
+            out.append(
+                "缓存命中率仅 %.0f%%: 检查常驻内容是否稳定排在消息最前，对齐 provider 前缀缓存"
+                % (token_stats.cache_hit_rate * 100)
+            )
+        if token_stats.hash_flips:
+            out.append(
+                "system prompt/tools 哈希中途翻转 %d 次: 每次翻转都使 provider 前缀缓存失效、重付 prefill"
+                % token_stats.hash_flips
+            )
+        if token_stats.repeat_extra_tokens >= 5000:
+            out.append(
+                "重复注入约 %d token: 同一份工具结果被多次读入，考虑状态外置 + 派生摘要"
+                % token_stats.repeat_extra_tokens
+            )
+        if token_stats.growth_verdict.startswith("accelerat"):
+            out.append("每轮 token 增量在加速: 优先落地边界合同（派发传指针、回收收签收单）")
     if not timeline.loads and not timeline.file_reads:
         out.append("未检测到任何 skill 消费: 可能是本会话确实没用 skill，也可能是解析器缺口")
     if not judge_enabled:
@@ -354,6 +478,7 @@ def run_audit(job: Job) -> None:
                 job.mark("evaluating instruction following: %s" % Path(playbook).name)
                 if_results.append(evaluate_playbook(judge, Path(playbook), session))
         job.mark("deriving next steps")
+        token_stats = build_token_stats(session, timeline)
         expected = job.params.get("expect") or []
         consumed = {n.lower() for n in timeline.consumed_skill_names()}
         expectations = [
@@ -387,11 +512,15 @@ def run_audit(job: Job) -> None:
             "if_results": if_results_to_dict(if_results),
             "expectations": expectations,
             "event_feed": event_feed_to_list(session),
+            "token_stats": tokenstats_to_dict(token_stats),
+            "no_self_invoke": sorted(
+                s.name for s in catalog if s.disable_model_invocation
+            ),
             "judge_enabled": judge_enabled,
             "catalog_size": len(catalog),
             "status_line": status_line,
             "suggestions": suggest_next_steps(
-                timeline, expectations, judgments, if_results, judge_enabled
+                timeline, expectations, judgments, if_results, judge_enabled, token_stats
             ),
             "duration_s": round(time.time() - job.started_at, 1),
         }
@@ -462,7 +591,9 @@ class Handler(BaseHTTPRequestHandler):
         elif route.startswith("/static/"):
             self._send_file(WEBAPP_DIR / route[len("/static/"):])
         elif route == "/api/sessions":
-            self._send_json(200, {"sessions": list_sessions()})
+            self._send_json(200, list_sessions())
+        elif route == "/api/fleet":
+            self._send_json(200, {"fleet": fleet_stats()})
         elif route.startswith("/api/job/"):
             job = JOBS.get(route.rsplit("/", 1)[1])
             if not job:
