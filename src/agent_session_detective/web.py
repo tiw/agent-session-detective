@@ -68,7 +68,9 @@ def fingerprint(session_path: str, judge_model: str) -> str:
             total += st.st_size
         except OSError:
             continue
-    return "%.3f:%d:%s" % (newest, total, judge_model)
+    # RESULT_VERSION bumps whenever the result payload shape changes (e.g.
+    # turn items added): old cached results would render with missing data.
+    return "%.3f:%d:%s:v2" % (newest, total, judge_model)
 
 
 def cache_load(key: str, fp: str) -> Optional[dict]:
@@ -172,6 +174,12 @@ def tokenstats_to_dict(s: TokenStats) -> dict:
                 "injected_added": r.injected_added,
                 "output_added": r.output_added,
                 "crossed_compaction": r.crossed_compaction,
+                # drill-down: biggest contributors first, capped; previews only
+                "items": [
+                    {"bucket": it.bucket, "tokens": it.tokens, "preview": it.preview}
+                    for it in sorted(r.items, key=lambda x: -x.tokens)[:40]
+                    if it.tokens >= 5
+                ],
             }
             for r in s.turn_growth
         ],

@@ -52,6 +52,15 @@ class PromptHashRun:
 
 
 @dataclass
+class TurnItem:
+    """One observable content contribution inside a turn (drill-down)."""
+
+    bucket: str
+    tokens: int
+    preview: str
+
+
+@dataclass
 class TurnGrowth:
     turn: int  # 1-based
     ts: Optional[float]
@@ -63,6 +72,7 @@ class TurnGrowth:
     injected_added: int = 0  # tool results, token estimate
     output_added: int = 0  # model content parts, token estimate
     crossed_compaction: bool = False
+    items: List[TurnItem] = field(default_factory=list)
 
 
 @dataclass
@@ -203,6 +213,11 @@ def _event_text(e: Event) -> str:
     return ""
 
 
+def _preview(text: str, limit: int = 160) -> str:
+    one_line = " ".join(str(text).split())
+    return one_line[:limit]
+
+
 def _turn_growth(session: Session, timeline: Timeline) -> List[TurnGrowth]:
     # Subagent loops have their own context windows; per-turn growth and
     # buckets account for the main agent only.
@@ -211,6 +226,7 @@ def _turn_growth(session: Session, timeline: Timeline) -> List[TurnGrowth]:
     n = len(turns)
     comp_starts = [c.begin_ts for c in timeline.compactions if c.begin_ts]
     sums = [{"history": 0, "injected": 0, "output": 0} for _ in range(n)]
+    items: List[List[TurnItem]] = [[] for _ in range(n)]
     for e in session.events:
         if e.origin != "main" or e.ts is None or n == 0:
             continue
@@ -222,11 +238,18 @@ def _turn_growth(session: Session, timeline: Timeline) -> List[TurnGrowth]:
         if idx is None:
             continue
         if e.type == "TurnBegin":
-            sums[idx]["history"] += estimate_tokens(_event_text(e))
+            text = _event_text(e)
+            sums[idx]["history"] += estimate_tokens(text)
+            items[idx].append(TurnItem("history", estimate_tokens(text), _preview(text)))
         elif e.type == "ToolResult":
-            sums[idx]["injected"] += estimate_tokens(_event_text(e))
+            text = _event_text(e)
+            sums[idx]["injected"] += estimate_tokens(text)
+            items[idx].append(TurnItem("injected", estimate_tokens(text), _preview(text)))
         elif e.type == "ContentPart":
-            sums[idx]["output"] += estimate_tokens(_event_text(e))
+            text = _event_text(e)
+            if text:
+                sums[idx]["output"] += estimate_tokens(text)
+                items[idx].append(TurnItem("output", estimate_tokens(text), _preview(text)))
 
     rows: List[TurnGrowth] = []
     for i in range(n):
@@ -249,6 +272,7 @@ def _turn_growth(session: Session, timeline: Timeline) -> List[TurnGrowth]:
                 row.system_added = max(
                     0, row.added - (observed["history"] + observed["injected"] + observed["output"])
                 )
+        row.items = items[i]
         rows.append(row)
     return rows
 

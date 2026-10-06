@@ -50,7 +50,8 @@
       "token 治理四指标，全部从日志确定性抽取：缓存命中率（usage.record / token_usage，" +
       "全 agent 合计）；每轮增量形状（linear = 每轮加恒定 token，sublinear = 增量在缩，" +
       "accelerating = 增量在涨）；四桶分解（system 桶是残差推断，其余是按事件内容估的）；" +
-      "prompt 哈希翻转（llm.request 的 systemPromptHash/toolsHash 中途变化 = 前缀缓存失效）。"
+      "prompt 哈希翻转（llm.request 的 systemPromptHash/toolsHash 中途变化 = 前缀缓存失效）。" +
+      "点击柱子的柱子可以下钻：该轮每个桶各加了多少、注入的具体是什么内容。"
   };
 
   var TEMPLATES = {
@@ -361,6 +362,65 @@
   // report rendering
   // ------------------------------------------------------------------
 
+  var currentTurnGrowth = [];
+
+  function turnDetailHtml(r) {
+    var names = { system: "system（残差，推断）", history: "history（你的输入）",
+                  injected: "injected（工具注入）", output: "output（模型产出）" };
+    var head = "<strong>T" + r.turn + "</strong> · +" + r.added + " tokens · 上下文至 " +
+      r.context_at_start + (r.exact ? "" : "（插值）");
+    var blocks = ["system", "history", "injected", "output"].map(function (k) {
+      var sub = r[k + "_added"] || 0;
+      if (k !== "system" && sub <= 0) return "";
+      var share = r.added ? Math.round(sub / r.added * 100) : 0;
+      var rows = (r.items || []).filter(function (it) { return it.bucket === k; });
+      var body;
+      if (k === "system") {
+        body = '<p class="dim">残差 = 观测不到归属的增量（system prompt / 工具 schema / token 估算误差），日志里没有它的内容明细。</p>';
+      } else if (!rows.length) {
+        body = '<p class="dim">无明细（条目过小已被过滤）。</p>';
+      } else {
+        body = rows.map(function (it) {
+          return '<div class="turn-item"><span class="dim">~' + it.tokens + "</span> " +
+            esc((it.preview || "").slice(0, 120)) + "</div>";
+        }).join("");
+      }
+      return "<details" + (k === "injected" ? " open" : "") + "><summary>" +
+        '<span class="seg-' + k + '"></span>' + esc(names[k]) + " · " + sub +
+        "（" + share + "%）" + (rows.length ? " · " + rows.length + " 项" : "") +
+        "</summary>" + body + "</details>";
+    }).join("");
+    return '<div class="turn-detail-head">' + head + "</div>" + blocks;
+  }
+
+  // bar click drill-down: show what each bucket added this turn; click the
+  // same bar again (or another bar) to close/switch
+  document.addEventListener("click", function (ev) {
+    var bar = ev.target.closest ? ev.target.closest(".bar") : null;
+    if (!bar) return;
+    var box = document.getElementById("turn-detail");
+    if (!box) return;
+    var turnNo = bar.getAttribute("data-turn");
+    if (box.getAttribute("data-turn") === turnNo && !box.hidden) {
+      box.hidden = true;
+      box.removeAttribute("data-turn");
+      bar.classList.remove("active");
+      return;
+    }
+    var row = null;
+    for (var i = 0; i < currentTurnGrowth.length; i++) {
+      if (String(currentTurnGrowth[i].turn) === turnNo) row = currentTurnGrowth[i];
+    }
+    if (!row) return;
+    box.innerHTML = turnDetailHtml(row);
+    box.hidden = false;
+    box.setAttribute("data-turn", turnNo);
+    bar.parentNode.querySelectorAll(".bar").forEach(function (b) {
+      b.classList.toggle("active", b === bar);
+    });
+    box.scrollIntoView({ block: "nearest" });
+  });
+
   function renderTokenStats(t) {
     if (!t) return "";
     var parts = [];
@@ -396,6 +456,7 @@
         return r.added != null && r.added >= 0 && !r.crossed_compaction;
       });
       if (grew.length) {
+        currentTurnGrowth = grew;
         var maxAdded = Math.max.apply(null, grew.map(function (r) { return r.added; })) || 1;
         var bars = grew.map(function (r) {
           var observed = r.system_added + r.history_added + r.injected_added + r.output_added;
@@ -405,14 +466,16 @@
             return v > 0 ? '<span class="bar-seg seg-' + k + '" style="height:' +
               Math.max(2, Math.round(v / maxAdded * 56)) + 'px"></span>' : "";
           }).join("");
-          return '<div class="bar" title="T' + r.turn + " +" + r.added + '">' + segs + "</div>";
+          return '<div class="bar" data-turn="' + r.turn + '" title="T' + r.turn + " +" + r.added +
+            ' tokens · 点击查看构成">' + segs + "</div>";
         }).join("");
         var legend = order.map(function (k) {
           return '<span><span class="seg-' + k + '"></span>' + esc(k) + "</span>";
         }).join("");
         parts.push('<div class="bar-chart">' + bars + '</div>');
         parts.push('<div class="bar-legend">' + legend +
-          '<span class="dim">system 为残差推断 · 被压缩跨越的轮次已剔除</span></div>');
+          '<span class="dim">system 为残差推断 · 被压缩跨越的轮次已剔除 · 点击柱子下钻</span></div>');
+        parts.push('<div id="turn-detail" hidden></div>');
       }
     }
 
