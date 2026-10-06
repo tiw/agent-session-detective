@@ -358,3 +358,17 @@ blockquote {
   display: inline-block; width: 8px; height: 8px; border-radius: 2px;
   margin-right: 4px; opacity: 0.85; vertical-align: 0;
 }
+
+/* event feed filter: kind chips reuse the kind-badge palette; the active
+   chip lights up, rows of other kinds are hidden */
+.feed-filter { display: flex; gap: 6px; flex-wrap: wrap; align-items: center;
+               margin-bottom: 8px; }
+.feed-filter .kind-badge { width: auto; padding: 0 8px; cursor: pointer;
+                           font: inherit; font-size: 10px; background: transparent; opacity: 0.75;
+                           transition: opacity var(--dur-press) var(--ease-out); }
+/* kind-user is dark-on-amber by design; keep its background or the text
+   disappears against the dark surface */
+.feed-filter .kind-badge.kind-user { background: var(--accent); }
+.feed-filter .kind-badge:hover { opacity: 1; }
+.feed-filter .kind-badge.active { opacity: 1; box-shadow: 0 0 0 1px currentColor; }
+.hidden { display: none !important; }

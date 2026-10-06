@@ -45,7 +45,7 @@
     "feed":
       "原始事件流，最近 400 条，按时间排序。角色 badge：user = 人的输入，think = 模型思考，" +
       "say = 模型给你的回复，tool = 工具调用，result = 工具返回，compact = 上下文压缩。" +
-      "[subagent:x] 标记表示事件来自子代理。",
+      "[subagent:x] 标记表示事件来自子代理。点筛选条上的角色只显示该类，再点一次恢复全部。",
     "tokens":
       "token 治理四指标，全部从日志确定性抽取：缓存命中率（usage.record / token_usage，" +
       "全 agent 合计）；每轮增量形状（linear = 每轮加恒定 token，sublinear = 增量在缩，" +
@@ -544,13 +544,25 @@
 
     var KIND_CLS = { user: "user", think: "think", say: "say", tool: "tool",
                      result: "dim", compact: "bad", status: "dim", sys: "dim" };
+    var KIND_ORDER = ["user", "think", "say", "tool", "result", "compact", "status", "sys"];
     var feed = r.event_feed.map(function (e) {
       var origin = e.origin !== "main" ? ' <span class="event-origin">[' + esc(e.origin) + "]</span>" : "";
       var kind = '<span class="kind-badge kind-' + (KIND_CLS[e.kind] || "dim") + '">' + esc(e.kind) + "</span>";
-      return '<div class="event-row"><div class="event-ts">' + esc(fmtTs(e.ts)) + "</div><div>" +
+      return '<div class="event-row" data-kind="' + esc(e.kind) + '"><div class="event-ts">' + esc(fmtTs(e.ts)) + "</div><div>" +
         kind + " " + esc(e.text) + origin + "</div></div>";
     }).join("");
-    parts.push("<section><h2>event feed " + helpDot("feed") + "</h2><div class='event-feed'>" + feed + "</div>" +
+    // filter bar: one toggle per kind present, with counts; reusing the
+    // kind-badge palette so a filter chip matches the rows it selects
+    var counts = {};
+    r.event_feed.forEach(function (e) { counts[e.kind] = (counts[e.kind] || 0) + 1; });
+    var chips = KIND_ORDER.filter(function (k) { return counts[k]; }).map(function (k) {
+      return '<button type="button" class="kind-badge kind-' + (KIND_CLS[k] || "dim") +
+        ' feed-filter-btn" data-kind="' + esc(k) + '" aria-pressed="false">' +
+        esc(k) + " " + counts[k] + "</button>";
+    }).join("");
+    parts.push("<section><h2>event feed " + helpDot("feed") + "</h2>" +
+      '<div class="feed-filter">' + chips + "</div>" +
+      "<div class='event-feed'>" + feed + "</div>" +
       '<div class="never-ship">never ship: judgments without verbatim evidence · ' +
       "plans counted as actions · model-reported arithmetic</div></section>");
 
@@ -558,6 +570,28 @@
     var rerun = document.getElementById("rerun-btn");
     if (rerun) rerun.addEventListener("click", rerunFresh);
   }
+
+  // delegated filter: click a kind chip to keep only those rows, click the
+  // active chip again (or another chip) to switch; rows carry data-kind
+  document.addEventListener("click", function (ev) {
+    var btn = ev.target.closest ? ev.target.closest(".feed-filter-btn") : null;
+    if (!btn) return;
+    var bar = btn.parentNode;
+    var kind = btn.getAttribute("data-kind");
+    var turningOff = btn.getAttribute("aria-pressed") === "true";
+    var btns = bar.querySelectorAll(".feed-filter-btn");
+    btns.forEach(function (b) { b.setAttribute("aria-pressed", "false"); b.classList.remove("active"); });
+    var feedBox = bar.parentNode.querySelector(".event-feed");
+    if (!feedBox) return;
+    feedBox.querySelectorAll(".event-row").forEach(function (row) {
+      var match = turningOff || row.getAttribute("data-kind") === kind;
+      row.classList.toggle("hidden", !match);
+    });
+    if (!turningOff) {
+      btn.setAttribute("aria-pressed", "true");
+      btn.classList.add("active");
+    }
+  });
 
   loadSessions();
 })();
