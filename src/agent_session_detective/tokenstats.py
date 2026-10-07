@@ -96,7 +96,7 @@ class TokenStats:
     bucket_totals: Dict[str, int] = field(default_factory=dict)
     bucket_shares: Dict[str, float] = field(default_factory=dict)
     hash_runs: List[PromptHashRun] = field(default_factory=list)
-    hash_flips: int = 0
+    hash_flips: Optional[int] = None
     repeats: List[Repeat] = field(default_factory=list)
     repeat_extra_tokens: int = 0
 
@@ -135,16 +135,18 @@ def _usage_from_events(events: List[Event]) -> List[UsageRecord]:
     return out
 
 
-def _hash_runs(events: List[Event]) -> Tuple[List[PromptHashRun], int]:
+def _hash_runs(events: List[Event]) -> Tuple[List[PromptHashRun], Optional[int]]:
     """Collapse LLMRequest events (main agent only) into per-hash runs.
 
     A hash flip is a log fact: the request prefix changed. That it broke a
-    provider cache is the inference the report layer labels as such.
+    provider cache is the inference the report layer labels as such. A log
+    without request hashes cannot establish a zero-flip fact.
     """
     runs: List[PromptHashRun] = []
     last_run: Dict[str, PromptHashRun] = {}
     prev_hash: Dict[str, str] = {}
     flips = 0
+    has_request_hash = False
     for e in events:
         if e.type != "LLMRequest" or e.origin != "main":
             continue
@@ -153,6 +155,7 @@ def _hash_runs(events: List[Event]) -> Tuple[List[PromptHashRun], int]:
             h = str(p.get(key) or "")
             if not h:
                 continue
+            has_request_hash = True
             run = last_run.get(kind)
             if run is not None and run.hash == h:
                 run.requests += 1
@@ -164,7 +167,7 @@ def _hash_runs(events: List[Event]) -> Tuple[List[PromptHashRun], int]:
                 run = PromptHashRun(kind=kind, hash=h, first_ts=e.ts, last_ts=e.ts, requests=1)
                 runs.append(run)
                 last_run[kind] = run
-    return runs, flips
+    return runs, flips if has_request_hash else None
 
 
 def _turn_contexts(session: Session) -> List[Tuple[int, bool]]:
@@ -218,7 +221,23 @@ def _preview(text: str, limit: int = 160) -> str:
     return one_line[:limit]
 
 
+def _has_context_measurement(session: Session) -> bool:
+    return any(
+        e.origin == "main"
+        and (
+            (e.type == "StatusUpdate" and e.payload.get("context_tokens") is not None)
+            or (e.type == "TurnTokens" and e.payload.get("tokens") is not None)
+        )
+        for e in session.events
+    )
+
+
 def _turn_growth(session: Session, timeline: Timeline) -> List[TurnGrowth]:
+    # Context growth requires an actual context measurement. Do not turn an
+    # absent series (as in Qoder transcripts) into zero-delta pseudo-data.
+    if not _has_context_measurement(session):
+        return []
+
     # Subagent loops have their own context windows; per-turn growth and
     # buckets account for the main agent only.
     turns = [t for t in session.turns() if t.origin == "main"]
@@ -345,7 +364,11 @@ def build_token_stats(session: Session, timeline: Timeline) -> TokenStats:
 
     stats.hash_runs, stats.hash_flips = _hash_runs(session.events)
     stats.turn_growth = _turn_growth(session, timeline)
-    stats.growth_verdict = _growth_verdict(stats.turn_growth)
+    stats.growth_verdict = (
+        _growth_verdict(stats.turn_growth)
+        if _has_context_measurement(session)
+        else "unavailable (no context telemetry)"
+    )
     stats.repeats, stats.repeat_extra_tokens = _repeats(session.events)
 
     totals = {k: 0 for k in BUCKET_KEYS}

@@ -14,9 +14,10 @@ from .judge import Judge, judge_session
 from .report import render_report
 from .timeline import build_timeline
 from .tokenstats import build_token_stats
-from .wire import find_latest_session, load_session
+from .wire import find_latest_qoder_transcript, find_latest_session, load_session
 
 DEFAULT_SESSIONS_ROOT = "~/.kimi/sessions"
+DEFAULT_QODER_PROJECTS_ROOT = "~/.qoder/projects"
 
 
 def main(argv=None) -> int:
@@ -28,17 +29,17 @@ def main(argv=None) -> int:
         "session",
         nargs="?",
         default=None,
-        help="Session directory (containing wire.jsonl). Defaults to the most recent session.",
+        help="Session source (a Kimi session directory or Qoder .jsonl transcript). Defaults to the most recent session.",
     )
     parser.add_argument(
         "--sessions-root",
         default=DEFAULT_SESSIONS_ROOT,
-        help="Root used to locate the most recent session (default: %(default)s).",
+        help="Kimi sessions root used to locate the most recent session (default: %(default)s).",
     )
     parser.add_argument("--skills-dir", action="append", default=None,
                         help="Extra skill directory to include in the catalog (repeatable).")
     parser.add_argument("--out", default=None,
-                        help="Report output path (default: <session>/skill-audit.html).")
+                        help="Report output path (default: <Kimi session>/skill-audit.html or <Qoder transcript>.skill-audit.html).")
     parser.add_argument("--open", action="store_true", help="Open the report in a browser.")
     parser.add_argument("--no-judge", action="store_true", help="Skip LLM trigger judging.")
     parser.add_argument("--expect", default=None,
@@ -61,20 +62,27 @@ def main(argv=None) -> int:
         serve(args.port)
         return 0
 
-    session_dir = Path(args.session).expanduser() if args.session else find_latest_session(
-        Path(args.sessions_root).expanduser()
+    if args.session:
+        session_source = Path(args.session).expanduser()
+    else:
+        kimi_session = find_latest_session(Path(args.sessions_root).expanduser())
+        qoder_transcript = find_latest_qoder_transcript(
+            Path(DEFAULT_QODER_PROJECTS_ROOT).expanduser()
+        )
+        candidates = [path for path in (kimi_session, qoder_transcript) if path is not None]
+        session_source = max(candidates, key=_session_source_mtime) if candidates else None
+    has_log = session_source is not None and (
+        (session_source.is_file() and session_source.suffix == ".jsonl")
+        or (session_source / "wire.jsonl").exists()
+        or (session_source / "agents" / "main" / "wire.jsonl").exists()
     )
-    has_wire = session_dir is not None and (
-        (session_dir / "wire.jsonl").exists()
-        or (session_dir / "agents" / "main" / "wire.jsonl").exists()
-    )
-    if session_dir is None or not has_wire:
-        print("No session found. Pass a session directory or check --sessions-root.", file=sys.stderr)
+    if session_source is None or not has_log:
+        print("No session found. Pass a session source or check --sessions-root.", file=sys.stderr)
         return 1
 
-    session = load_session(session_dir)
+    session = load_session(session_source)
     if not session.events:
-        print("No events parsed from %s" % session_dir, file=sys.stderr)
+        print("No events parsed from %s" % session_source, file=sys.stderr)
         return 1
 
     timeline = build_timeline(session)
@@ -119,7 +127,7 @@ def main(argv=None) -> int:
         token_stats=token_stats,
         no_self_invoke={s.name.lower() for s in catalog if s.disable_model_invocation},
     )
-    out_path = Path(args.out) if args.out else session_dir / "skill-audit.html"
+    out_path = Path(args.out) if args.out else _default_output_path(session_source)
     out_path.write_text(report, encoding="utf-8")
     print(out_path)
 
@@ -138,6 +146,19 @@ def main(argv=None) -> int:
     if args.open:
         webbrowser.open(out_path.as_uri())
     return 1 if failed else 0
+
+
+def _session_source_mtime(source: Path) -> float:
+    if source.is_file():
+        return source.stat().st_mtime
+    wires = [source / "wire.jsonl", source / "agents" / "main" / "wire.jsonl"]
+    return max((wire.stat().st_mtime for wire in wires if wire.exists()), default=0.0)
+
+
+def _default_output_path(source: Path) -> Path:
+    if source.is_file():
+        return source.with_name(source.stem + ".skill-audit.html")
+    return source / "skill-audit.html"
 
 
 def _parse_expected(raw: str) -> List[str]:

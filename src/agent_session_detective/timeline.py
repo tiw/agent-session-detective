@@ -74,6 +74,7 @@ class Timeline:
     loads: List[SkillLoad] = field(default_factory=list)
     file_reads: List[SkillFileRead] = field(default_factory=list)
     compactions: List[Compaction] = field(default_factory=list)
+    compaction_telemetry_available: bool = True
     status_series: List[Event] = field(default_factory=list)
     turns: List[Event] = field(default_factory=list)
 
@@ -108,7 +109,10 @@ def _skill_file_path(arguments: str) -> Optional[str]:
 
 
 def build_timeline(session: Session) -> Timeline:
-    timeline = Timeline(turns=session.turns())
+    timeline = Timeline(
+        turns=session.turns(),
+        compaction_telemetry_available=session.compaction_telemetry_available,
+    )
 
     results_by_id: Dict[str, Event] = {}
     calls: List[Event] = []

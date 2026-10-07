@@ -57,9 +57,15 @@ PYTHONPATH=src python3 -m agent_session_detective ~/.kimi-code/sessions/wd_xxx/s
   --no-judge \
   --expect "Poteto Mode,how,why,architect,principle-fix-root-causes,tdd,unslop" \
   --open
+
+# 审计指定的 Qoder transcript
+PYTHONPATH=src python3 -m agent_session_detective \
+  ~/.qoder/projects/<workspace>/<session>.jsonl --no-judge
 ```
 
-报告默认写到 `<会话目录>/skill-audit.html`，可用 `--out` 改。
+省略 `session` 时，会在 Kimi 会话和 `~/.qoder/projects` 下的 Qoder transcript 中选择最近修改的一份。
+
+报告默认写到 `<会话目录>/skill-audit.html`；Qoder transcript 则写到同目录的 `<session>.skill-audit.html`，可用 `--out` 改。
 
 ### 开启 LLM 触发判断
 
@@ -150,10 +156,10 @@ JSON API 也可以独立使用（`GET /api/sessions`（最近 10 个，纯发现
 
 | 参数 | 说明 |
 |---|---|
-| `session` | 会话目录（含 `wire.jsonl`）。省略则自动找最近一个 |
-| `--sessions-root` | 自动定位会话时的根目录，默认 `~/.kimi/sessions` |
+| `session` | Kimi 会话目录（含 `wire.jsonl`）或 Qoder transcript（`~/.qoder/projects/<workspace>/<session>.jsonl`）。省略则自动找最近一个 |
+| `--sessions-root` | 自动定位最近 Kimi 会话时的根目录，默认 `~/.kimi/sessions` |
 | `--skills-dir` | 追加 skill 目录到 catalog，可重复 |
-| `--out` | 报告输出路径，默认 `<会话目录>/skill-audit.html` |
+| `--out` | 报告输出路径，默认 Kimi 的 `<会话目录>/skill-audit.html` 或 Qoder 的 `<session>.skill-audit.html` |
 | `--open` | 生成后直接用浏览器打开 |
 | `--no-judge` | 只出事实，跳过 LLM 判断 |
 | `--expect` | 逗号分隔的预期 skill 名，渲染成命中/缺失清单 |
@@ -170,14 +176,17 @@ JSON API 也可以独立使用（`GET /api/sessions`（最近 10 个，纯发现
 
 ## 支持的日志格式
 
-`asd` 同时理解两种磁盘格式，并在解析层统一成同一个 `Event` 模型，下游模块只看到一种形状。
+`asd` 同时理解三种磁盘格式，并在解析层统一成同一个 `Event` 模型，下游模块只看到一种形状。
 
 | 格式 | 主日志 | 子代理日志 |
 |---|---|---|
 | **CLI**（protocol 1.9） | `<session>/wire.jsonl` | `<session>/subagents/<id>/wire.jsonl` |
 | **桌面版**（protocol 1.5） | `<session>/agents/main/wire.jsonl` | `<session>/agents/agent-*/wire.jsonl` |
+| **Qoder transcript** | `~/.qoder/projects/<workspace>/<session>.jsonl` | 不适用 |
 
 桌面版记录（`turn.prompt`、`context.append_loop_event`、`token_counting.measured`、`token_counting.turn_recorded`、`usage.record`、`llm.request`）会被翻译成 CLI 格式对应的事件类型；子代理里加载的 skill 会归因到父会话的时间线上。缓存与输出 token 两种格式都有：桌面版在 `usage.record`，CLI 版在 `StatusUpdate.token_usage`；prompt 前缀稳定性（`systemPromptHash`/`toolsHash`）只有桌面版记录。
+
+Qoder transcript 支持提取对话、工具和 skill 事实，以及其中存在的 usage 记录；上下文测量、压缩事件和 prompt/tool 哈希在该格式中不可用，报告会显示为不可用，不会用推断值替代。
 
 skill 的识别有两条独立路径，报告里分开呈现：
 
@@ -237,7 +246,7 @@ skill catalog 从 `~/.agents/skills` 和 `~/.kimi/skills` 扫描，可用 `--ski
 ## 已知限制
 
 - **只读日志，不插桩**——历史会话可审计，但精度受限于日志本身记录了什么。日志不记录"skill 被丢弃"，所以挤出只能标注为推断。
-- **只支持 Kimi Code 的两种格式**。Claude Code 和框架无关的中间格式未实现。
+- **支持 Kimi Code 的两种格式和 Qoder transcript**。Claude Code 和框架无关的中间格式未实现。
 - **跨会话只有轻量 fleet 聚合**（web 会话列表上方的汇总条），不做趋势存储和历史对比；一次深度审计仍然只针对一个会话。
 - **"加载了但没遵守"是独立的一条轴**：`--steps` 的分数衡量的是"规定动作执行度"，被 playbook 明文授权、带 `skip: <原因>` 的跳过**仍然计 0 分**。这是有意的——判断遵守度需要 `--steps` 评分和 `--expect` 清单两个轴一起看。
 - **`if_eval` 的步骤解析比较挑格式**：只认顶格的 `N. ` 编号行，缩进续行会被拼接。

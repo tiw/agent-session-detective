@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Iterator, List, Optional
 
@@ -78,6 +79,7 @@ class Session:
     directory: Path
     events: List[Event] = field(default_factory=list)
     protocol_version: Optional[str] = None
+    compaction_telemetry_available: bool = True
 
     def turns(self) -> List[Event]:
         return [e for e in self.events if e.type == "TurnBegin"]
@@ -196,8 +198,81 @@ def parse_wire(path: Path, origin: str) -> Iterator[Event]:
             )
 
 
+def _qoder_timestamp(value: object) -> Optional[float]:
+    if not isinstance(value, str):
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
+
+
+def parse_qoder_transcript(path: Path, origin: str = "main") -> Iterator[Event]:
+    """Normalize a Qoder project transcript into existing event types."""
+    with open(path, "r", encoding="utf-8", errors="replace") as fh:
+        for seq, line in enumerate(fh, start=1):
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(record, dict) or record.get("type") not in ("user", "assistant"):
+                continue
+            message = record.get("message")
+            if not isinstance(message, dict):
+                continue
+            content = message.get("content")
+            if isinstance(content, str):
+                content = [{"type": "text", "text": content}]
+            if not isinstance(content, list):
+                continue
+            ts = _qoder_timestamp(record.get("timestamp"))
+            if record["type"] == "user":
+                user_input = [part for part in content if isinstance(part, dict) and part.get("type") == "text"]
+                if user_input:
+                    yield Event(ts, "TurnBegin", {"user_input": user_input}, origin, path, seq)
+                for part in content:
+                    if isinstance(part, dict) and part.get("type") == "tool_result":
+                        yield Event(ts, "ToolResult", {
+                            "tool_call_id": part.get("tool_use_id"),
+                            "return_value": {
+                                "output": part.get("content", ""),
+                                "is_error": bool(part.get("is_error", False)),
+                            },
+                        }, origin, path, seq)
+                continue
+            for part in content:
+                if not isinstance(part, dict):
+                    continue
+                if part.get("type") == "text":
+                    yield Event(ts, "ContentPart", {"type": "text", "text": part.get("text", "")}, origin, path, seq)
+                elif part.get("type") == "thinking":
+                    yield Event(ts, "ContentPart", {"type": "think", "think": part.get("thinking", "")}, origin, path, seq)
+                elif part.get("type") == "tool_use":
+                    yield Event(ts, "ToolCall", {
+                        "id": part.get("id"),
+                        "function": {
+                            "name": part.get("name"),
+                            "arguments": json.dumps(part.get("input") or {}, ensure_ascii=False),
+                        },
+                    }, origin, path, seq)
+            usage = message.get("usage")
+            if isinstance(usage, dict):
+                yield Event(ts, "UsageRecord", {
+                    "input_other": usage.get("input_tokens", 0),
+                    "output": usage.get("output_tokens", 0),
+                    "input_cache_read": usage.get("cache_read_input_tokens", 0),
+                    "input_cache_creation": usage.get("cache_creation_input_tokens", 0),
+                    "model": message.get("model", record.get("model", "")),
+                }, origin, path, seq)
+
+
 def load_session(directory: Path) -> Session:
     directory = Path(directory)
+    if directory.is_file():
+        session = Session(directory=directory.parent, compaction_telemetry_available=False)
+        session.events.extend(parse_qoder_transcript(directory))
+        session.events.sort(key=lambda e: (e.ts is None, e.ts or 0.0, e.seq))
+        return session
     session = Session(directory=directory)
     main_candidates = [directory / "wire.jsonl", directory / "agents" / "main" / "wire.jsonl"]
     for main_wire in main_candidates:
@@ -215,6 +290,12 @@ def load_session(directory: Path) -> Session:
             session.events.append(record)
     session.events.sort(key=lambda e: (e.ts is None, e.ts or 0.0, e.seq))
     return session
+
+
+def find_latest_qoder_transcript(base: Path) -> Optional[Path]:
+    """Most recently modified Qoder transcript under the projects root."""
+    transcripts = list(base.glob("*/*.jsonl"))
+    return max(transcripts, key=lambda p: p.stat().st_mtime) if transcripts else None
 
 
 def find_latest_session(base: Path) -> Optional[Path]:

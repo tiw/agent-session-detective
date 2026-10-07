@@ -1,0 +1,5 @@
+{"type":"user","uuid":"u1","timestamp":"2026-10-07T08:00:00.000Z","message":{"content":[{"type":"text","text":"audit this"}]}}
+{"type":"assistant","uuid":"a1","timestamp":"2026-10-07T08:00:01.000Z","message":{"content":[{"type":"text","text":"I will inspect it."},{"type":"thinking","thinking":"inspect trace"},{"type":"tool_use","id":"tool-skill","name":"Skill","input":{"skill":"superpowers:brainstorming"}},{"type":"tool_use","id":"tool-read","name":"Read","input":{"file_path":"/tmp/demo/SKILL.md"}}],"usage":{"input_tokens":120,"output_tokens":30,"cache_read_input_tokens":80,"cache_creation_input_tokens":0},"model":"qoder-model"}}
+{"type":"user","uuid":"r1","sourceToolAssistantUUID":"a1","timestamp":"2026-10-07T08:00:02.000Z","message":{"content":[{"type":"tool_result","tool_use_id":"tool-skill","content":"skill instructions"},{"type":"tool_result","tool_use_id":"tool-read","content":"plain skill file"}]}}
+{"type":"metadata","sessionId":"ignored"}
+not valid json

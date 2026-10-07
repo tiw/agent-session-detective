@@ -143,7 +143,9 @@ def _render_token_governance(stats: TokenStats) -> str:
         "missed" if stats.growth_verdict.startswith(("accelerat", "linear")) else ""
     )
     badges.append("<span class='badge %s'>growth: %s</span>" % (verdict_cls, esc(stats.growth_verdict)))
-    if stats.hash_runs:
+    if stats.hash_flips is None:
+        badges.append("<span class='badge'>prompt flips: unavailable (no LLM request hashes)</span>")
+    else:
         badges.append(
             "<span class='badge %s'>prompt flips: %d</span>"
             % ("missed" if stats.hash_flips else "ok", stats.hash_flips)
@@ -251,7 +253,9 @@ def render_report(
         "<span class='badge'>events: %d</span>" % len(session.events),
         "<span class='badge fact'>skills loaded: %d</span>" % len(timeline.loads),
         "<span class='badge'>skill files read: %d</span>" % len(timeline.file_reads),
-        "<span class='badge'>compactions: %d</span>" % len(timeline.compactions),
+        "<span class='badge'>compactions: %s</span>" % (
+            len(timeline.compactions) if timeline.compaction_telemetry_available else "unavailable"
+        ),
         "<span class='badge'>catalog: %d skills</span>" % catalog_size,
         "<span class='badge ok'>judge: %s</span>" % ("on" if judge_enabled else "off"),
         "</div></header><main>",

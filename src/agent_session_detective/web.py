@@ -25,7 +25,7 @@ from .wire import Session, find_latest_session, load_session
 
 WEBAPP_DIR = Path(__file__).parent / "webapp"
 
-DEFAULT_ROOTS = ["~/.kimi-code/sessions", "~/.kimi/sessions"]
+DEFAULT_ROOTS = ["~/.kimi-code/sessions", "~/.kimi/sessions", "~/.qoder/projects"]
 
 CACHE_DIR = Path("~/.cache/agent-session-detective").expanduser()
 
@@ -50,16 +50,22 @@ def cache_key(params: dict) -> str:
 
 
 def fingerprint(session_path: str, judge_model: str) -> str:
-    """Log identity: newest mtime + total size of every wire file, plus the
-    judge model (different model, different verdicts)."""
+    """Log identity: source log metadata plus judge model.
+
+    Directory inputs include every wire file; a transcript-file input uses
+    that file's mtime and size directly.
+    """
     base = Path(session_path).expanduser()
-    wires = [base / "wire.jsonl"]
-    sub = base / "subagents"
-    agents = base / "agents"
-    if sub.is_dir():
-        wires += list(sub.glob("*/wire.jsonl"))
-    if agents.is_dir():
-        wires += list(agents.glob("*/wire.jsonl"))
+    if base.is_file():
+        wires = [base]
+    else:
+        wires = [base / "wire.jsonl"]
+        sub = base / "subagents"
+        agents = base / "agents"
+        if sub.is_dir():
+            wires += list(sub.glob("*/wire.jsonl"))
+        if agents.is_dir():
+            wires += list(agents.glob("*/wire.jsonl"))
     newest, total = 0.0, 0
     for w in wires:
         try:
@@ -70,7 +76,8 @@ def fingerprint(session_path: str, judge_model: str) -> str:
             continue
     # RESULT_VERSION bumps whenever the result payload shape changes (e.g.
     # turn items added): old cached results would render with missing data.
-    return "%.3f:%d:%s:v2" % (newest, total, judge_model)
+    # v3 adds timeline.compaction_count.
+    return "%.3f:%d:%s:v3" % (newest, total, judge_model)
 
 
 def cache_load(key: str, fp: str) -> Optional[dict]:
@@ -146,6 +153,9 @@ def timeline_to_dict(timeline: Timeline) -> dict:
             {"index": c.index, "begin_ts": c.begin_ts, "end_ts": c.end_ts}
             for c in timeline.compactions
         ],
+        "compaction_count": (
+            len(timeline.compactions) if timeline.compaction_telemetry_available else None
+        ),
         "status_series": [
             {"ts": e.ts, "context_tokens": e.payload.get("context_tokens")}
             for e in timeline.status_series
@@ -314,6 +324,21 @@ def discover_sessions(roots: Optional[List[str]] = None) -> List[dict]:
                 "workspace": session_dir.parent.name,
                 "mtime": mtime,
             }
+        for transcript in base.glob("*/*.jsonl"):
+            try:
+                mtime = transcript.stat().st_mtime
+            except OSError:
+                continue
+            sid = transcript.stem
+            source_key = "qoder:%s" % transcript.resolve()
+            if source_key in found and found[source_key]["mtime"] >= mtime:
+                continue
+            found[source_key] = {
+                "id": sid,
+                "path": str(transcript),
+                "workspace": transcript.parent.name,
+                "mtime": mtime,
+            }
     return sorted(found.values(), key=lambda s: -s["mtime"])
 
 
@@ -465,8 +490,9 @@ def run_audit(job: Job) -> None:
     job.status = "running"
     job.started_at = time.time()
     try:
-        job.mark("parsing wire.jsonl")
-        session = load_session(Path(job.params["path"]).expanduser())
+        job.mark("parsing session log")
+        source_path = Path(job.params["path"]).expanduser()
+        session = load_session(source_path)
         if not session.events:
             raise ValueError("no events parsed")
         job.mark("building fact timeline (%d events)" % len(session.events))
@@ -511,7 +537,7 @@ def run_audit(job: Job) -> None:
         )
         job.result = {
             "session": {
-                "path": str(session.directory),
+                "path": str(source_path),
                 "turns": len(timeline.turns),
                 "events": len(session.events),
             },

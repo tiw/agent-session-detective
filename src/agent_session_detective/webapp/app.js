@@ -434,9 +434,12 @@
       badges.push(badge("dim", "no usage records"));
     }
     var vcls = t.growth_verdict.indexOf("sublinear") === 0 ? "ok"
-      : t.growth_verdict.indexOf("insufficient") === 0 ? "dim" : "bad";
+      : t.growth_verdict.indexOf("insufficient") === 0 || t.growth_verdict.indexOf("unavailable") === 0
+        ? "dim" : "bad";
     badges.push(badge(vcls, "growth: " + t.growth_verdict));
-    if (t.hash_runs && t.hash_runs.length) {
+    if (t.hash_flips == null) {
+      badges.push(badge("dim", "prompt flips unavailable (no LLM request hashes)"));
+    } else {
       badges.push(badge(t.hash_flips ? "bad" : "ok", "prompt flips " + t.hash_flips));
     }
     if (t.repeats && t.repeats.length) {
@@ -514,6 +517,8 @@
       badge("dim", "events " + r.session.events) +
       badge("fact", "loaded " + r.timeline.loads.length) +
       badge("warn", "file-read " + r.timeline.file_reads.length) +
+      badge("dim", "compactions " + (r.timeline.compaction_count == null
+        ? "unavailable" : r.timeline.compaction_count)) +
       badge("dim", "catalog " + r.catalog_size) +
       badge(r.judge_enabled ? "ok" : "dim", "judge " + (r.judge_enabled ? "on" : "off")) +
       "</div></section>"

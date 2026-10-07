@@ -1,8 +1,9 @@
-"""Audit agent sessions against their skills.
+"""Audit Kimi Code and Qoder agent sessions against their skills.
 
-Reconstructs the skill lifecycle from a Kimi Code session log (what loaded,
-when, at what context cost, when compaction evicted it), judges which skills
-should have triggered but never did, and renders an interactive HTML report.
+Reconstructs the available skill lifecycle facts from a session log (what
+loaded, when, and available context or compaction telemetry), judges which
+skills should have triggered but never did, and renders an interactive HTML
+report.
 """
 
 __version__ = "0.1.0"
