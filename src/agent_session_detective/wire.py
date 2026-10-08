@@ -382,6 +382,7 @@ def _qoder_ref(record: dict) -> dict:
         "request_id": request_id,
         "request_hash": anchor.get("request"),
         "response_hash": anchor.get("response"),
+        "is_compact_summary": bool(record.get("isCompactSummary")),
     }
 
 
@@ -479,21 +480,51 @@ def parse_qoder_transcript(path: Path, origin: str = "main") -> Iterator[Event]:
             try:
                 record = json.loads(line)
             except json.JSONDecodeError:
+                yield Event(None, "RecordDropped", {"reason": "malformed_json"}, origin, path, seq, None)
                 continue
             if not isinstance(record, dict):
+                yield Event(None, "RecordDropped", {"reason": "non_dict"}, origin, path, seq, None)
                 continue
             if record.get("type") not in ("user", "assistant"):
                 meta = _qoder_meta_event(record, origin, path, seq)
                 if meta is not None:
                     yield meta
+                else:
+                    yield Event(
+                        _qoder_timestamp(record.get("timestamp")),
+                        "RecordDropped",
+                        {"reason": "record:%s" % record.get("type")},
+                        origin,
+                        path,
+                        seq,
+                        _qoder_ref(record),
+                    )
                 continue
             message = record.get("message")
             if not isinstance(message, dict):
+                yield Event(
+                    _qoder_timestamp(record.get("timestamp")),
+                    "RecordDropped",
+                    {"reason": "message_invalid"},
+                    origin,
+                    path,
+                    seq,
+                    _qoder_ref(record),
+                )
                 continue
             content = message.get("content")
             if isinstance(content, str):
                 content = [{"type": "text", "text": content}]
             if not isinstance(content, list):
+                yield Event(
+                    _qoder_timestamp(record.get("timestamp")),
+                    "RecordDropped",
+                    {"reason": "content_invalid"},
+                    origin,
+                    path,
+                    seq,
+                    _qoder_ref(record),
+                )
                 continue
             ts = _qoder_timestamp(record.get("timestamp"))
             ref = _qoder_ref(record)

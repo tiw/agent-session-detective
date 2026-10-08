@@ -1,0 +1,6 @@
+{"type": "user", "uuid": "u1", "parentUuid": null, "isSidechain": false, "timestamp": "2026-10-08T10:00:00.000Z", "message": {"content": [{"type": "text", "text": "no telemetry here"}]}}
+{"type": "assistant", "uuid": "u2", "parentUuid": "u1", "isSidechain": false, "timestamp": "2026-10-08T10:00:01.000Z", "message": {"content": [{"type": "text", "text": "working"}]}}
+{"type": "assistant", "uuid": "u3", "parentUuid": "u2", "isSidechain": false, "timestamp": "2026-10-08T10:00:02.000Z", "message": {"content": [{"type": "tool_use", "id": "tool-x", "name": "Bash", "input": {"command": "ls"}}]}}
+{"type": "assistant", "uuid": "u4", "parentUuid": "u3", "isSidechain": false, "timestamp": "2026-10-08T10:00:03.000Z", "message": {"content": [{"type": "text", "text": "done"}]}}
+{"type": "runtime-config", "uuid": "u5", "timestamp": 1791453604000, "model": "qoder-lite", "contextWindow": 200000}
+{"type": "active-leaf", "uuid": "u6", "timestamp": 1791453605000, "leafUuid": "leaf-1", "explicit": true}

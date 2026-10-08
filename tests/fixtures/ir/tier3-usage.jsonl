@@ -1,0 +1,3 @@
+{"type": "user", "uuid": "u1", "parentUuid": null, "isSidechain": false, "timestamp": "2026-10-08T10:00:00.000Z", "message": {"content": [{"type": "text", "text": "usage without identity"}]}}
+{"type": "assistant", "uuid": "u2", "parentUuid": "u1", "isSidechain": false, "timestamp": "2026-10-08T10:00:01.000Z", "message": {"model": "qoder-lite", "content": [{"type": "text", "text": "answering"}], "usage": {"input_tokens": 1200, "output_tokens": 60, "cache_read_input_tokens": 100}}}
+{"type": "assistant", "uuid": "u3", "parentUuid": "u2", "isSidechain": false, "timestamp": "2026-10-08T10:00:02.000Z", "message": {"content": [{"type": "text", "text": "trailing without usage"}]}}

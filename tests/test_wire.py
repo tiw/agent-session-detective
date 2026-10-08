@@ -31,6 +31,8 @@ class QoderTranscriptTests(unittest.TestCase):
                 "UsageRecord",
                 "ToolResult",
                 "ToolResult",
+                "RecordDropped",
+                "RecordDropped",
             ],
         )
         self.assertEqual(self.session.events[0].payload, {"user_input": [{"type": "text", "text": "audit this"}]})
@@ -70,7 +72,7 @@ class QoderTranscriptTests(unittest.TestCase):
         expected_ts = datetime(2026, 10, 7, 8, 0, tzinfo=timezone.utc).timestamp()
         self.assertEqual(self.session.events[0].ts, expected_ts)
         self.assertEqual(self.session.events[0].source, self.source)
-        self.assertEqual([event.seq for event in self.session.events], [1, 2, 2, 2, 2, 2, 3, 3])
+        self.assertEqual([event.seq for event in self.session.events], [1, 2, 2, 2, 2, 2, 3, 3, 4, 5])
 
     def test_normalizes_scalar_message_content_as_text(self):
         records = [
@@ -332,10 +334,12 @@ class QoderTranscriptTests(unittest.TestCase):
         self.assertEqual(events[0].ref, {
             "uuid": "u1", "parent_uuid": None, "is_sidechain": False,
             "request_id": None, "request_hash": None, "response_hash": None,
+            "is_compact_summary": False,
         })
         assistant_ref = {
             "uuid": "a1", "parent_uuid": "u1", "is_sidechain": False,
             "request_id": "req-1", "request_hash": "r" * 64, "response_hash": "s" * 64,
+            "is_compact_summary": False,
         }
         for event in events[1:4]:
             self.assertEqual(event.ref, assistant_ref)
@@ -360,6 +364,61 @@ class QoderTranscriptTests(unittest.TestCase):
         self.assertEqual([event.ref["request_id"] for event in events], ["req-old", "req-old"])
         self.assertIsNone(events[0].ref["request_hash"])
         self.assertIsNone(events[0].ref["response_hash"])
+
+    def test_dropped_records_surface_with_reasons_instead_of_vanishing(self):
+        records = [
+            {"type": "user", "uuid": "u0", "timestamp": "2026-10-07T08:00:00.000Z",
+             "message": {"content": [{"type": "text", "text": "go"}]}},
+            {"type": "last-prompt", "uuid": "lp1",
+             "timestamp": "2026-10-07T08:00:01.000Z"},
+            {"type": "user", "uuid": "u2", "timestamp": "2026-10-07T08:00:02.000Z",
+             "message": "not a dict"},
+            {"type": "assistant", "uuid": "a2", "timestamp": "2026-10-07T08:00:03.000Z",
+             "message": {"content": 5}},
+        ]
+        raw = "\n".join(json.dumps(record) for record in records)
+        raw += '\n{not json\n"just a string"\n'
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "transcript.jsonl"
+            source.write_text(raw, encoding="utf-8")
+            events = load_session(source).events
+
+        dropped = [event for event in events if event.type == "RecordDropped"]
+        self.assertEqual(
+            [event.payload["reason"] for event in dropped],
+            [
+                "record:last-prompt",
+                "message_invalid",
+                "content_invalid",
+                "malformed_json",
+                "non_dict",
+            ],
+        )
+        self.assertEqual([event.seq for event in dropped], [2, 3, 4, 5, 6])
+        # Records that exist as JSON objects keep their timestamp and ref …
+        self.assertTrue(all(event.ts is not None for event in dropped[:3]))
+        self.assertEqual(
+            [event.ref["uuid"] for event in dropped[:3]], ["lp1", "u2", "a2"]
+        )
+        # … while unparseable / non-object lines carry neither.
+        for event in dropped[3:]:
+            self.assertIsNone(event.ts)
+            self.assertIsNone(event.ref)
+
+    def test_user_record_flags_itself_as_compact_summary(self):
+        records = [
+            {"type": "user", "uuid": "u1", "isCompactSummary": True,
+             "timestamp": "2026-10-07T08:00:00.000Z",
+             "message": {"content": [{"type": "text", "text": "summary of prior work"}]}},
+        ]
+        events = self._load_records(records)
+
+        self.assertEqual([event.type for event in events], ["TurnBegin"])
+        self.assertTrue(events[0].ref["is_compact_summary"])
+        self.assertEqual(
+            events[0].payload,
+            {"user_input": [{"type": "text", "text": "summary of prior work"}]},
+        )
 
     def _load_records(self, records):
         with tempfile.TemporaryDirectory() as directory:

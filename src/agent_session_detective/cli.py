@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 import webbrowser
 from pathlib import Path
@@ -10,11 +11,13 @@ from typing import List
 
 from .catalog import load_catalog
 from .if_eval import IFResult, evaluate_playbook
+from .ir import build_analyses, build_audit_document
 from .judge import Judge, judge_session
 from .report import render_report
 from .timeline import build_timeline
 from .tokenstats import build_token_stats
 from .wire import (
+    Session,
     find_latest_codex_session,
     find_latest_qoder_transcript,
     find_latest_session,
@@ -48,6 +51,10 @@ def main(argv=None) -> int:
     parser.add_argument("--out", default=None,
                         help="Report output path (default: <session>/skill-audit.html "
                              "or <transcript>.skill-audit.html).")
+    parser.add_argument("--ir-out", default=None, metavar="PATH",
+                        help="Write this session's audit IR document as JSON.")
+    parser.add_argument("--ir-analyses", default=None, metavar="PATH",
+                        help="Write the three IR analyses as JSON (builds the IR in memory).")
     parser.add_argument("--open", action="store_true", help="Open the report in a browser.")
     parser.add_argument("--no-judge", action="store_true", help="Skip LLM trigger judging.")
     parser.add_argument("--expect", default=None,
@@ -98,6 +105,13 @@ def main(argv=None) -> int:
     if not session.events:
         print("No events parsed from %s" % session_source, file=sys.stderr)
         return 1
+
+    if args.ir_out or args.ir_analyses:
+        document = build_audit_document(session, _detect_adapter(session, session_source))
+        if args.ir_out:
+            _write_json(Path(args.ir_out), document.to_dict())
+        if args.ir_analyses:
+            _write_json(Path(args.ir_analyses), build_analyses(document))
 
     timeline = build_timeline(session)
     catalog = load_catalog(extra_dirs=args.skills_dir)
@@ -160,6 +174,33 @@ def main(argv=None) -> int:
     if args.open:
         webbrowser.open(out_path.as_uri())
     return 1 if failed else 0
+
+
+def _write_json(path: Path, payload) -> None:
+    path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    print(path)
+
+
+def _detect_adapter(session: Session, source: Path) -> str:
+    """Best-effort adapter id for the IR document.
+
+    The wire parsers leave distinct fingerprints: only the Qoder parser attaches
+    a per-record ``ref``; ``LLMRequest`` events come from the Kimi CLI parser;
+    ``TurnTokens``/``SubagentSpawned`` come from the Kimi desktop parser; Codex
+    rollouts are ``rollout-*.jsonl`` files. Anything else stays ``unknown``.
+    """
+    if any(event.ref is not None for event in session.events):
+        return "qoder"
+    kinds = {event.type for event in session.events}
+    if "LLMRequest" in kinds:
+        return "kimi-cli"
+    if kinds & {"TurnTokens", "SubagentSpawned"}:
+        return "kimi-desktop"
+    if source.name.startswith("rollout-"):
+        return "codex"
+    return "unknown"
 
 
 def _session_source_mtime(source: Path) -> float:
