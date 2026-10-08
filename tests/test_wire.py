@@ -52,7 +52,16 @@ class QoderTranscriptTests(unittest.TestCase):
             "output": 30,
             "input_cache_read": 80,
             "input_cache_creation": 0,
+            "input_cache_creation_5m": 0,
+            "input_cache_creation_1h": 0,
             "model": "qoder-model",
+            # Telemetry this fixture's record does not carry stays absent rather
+            # than being back-filled with a plausible default.
+            "context_usage_ratio": None,
+            "request_id": None,
+            "credits": None,
+            "original_credits": None,
+            "billable": None,
         })
 
     def test_preserves_timestamp_source_and_jsonl_line_numbers(self):
@@ -97,6 +106,268 @@ class QoderTranscriptTests(unittest.TestCase):
             events = load_session(source).events
 
         self.assertEqual(events[0].payload["return_value"]["is_error"], True)
+
+    def test_retains_compact_boundary_record_with_harness_measured_facts(self):
+        records = [
+            {"type": "user", "timestamp": "2026-10-07T08:00:00.000Z",
+             "message": {"content": [{"type": "text", "text": "keep going"}]}},
+            {
+                "type": "system",
+                "subtype": "compact_boundary",
+                "uuid": "cb1",
+                "logicalParentUuid": "a9",
+                "timestamp": "2026-10-07T08:00:05.919Z",
+                "content": "Conversation compacted",
+                "level": "info",
+                "isSidechain": False,
+                "compactMetadata": {
+                    "trigger": "auto",
+                    "preTokens": 231067,
+                    "messagesSummarized": 612,
+                    "postTokens": 3247,
+                    "durationMs": 32122,
+                },
+            },
+        ]
+        events = self._load_records(records)
+
+        compactions = [event for event in events if event.type == "CompactionBegin"]
+        self.assertEqual(len(compactions), 1)
+        self.assertEqual(compactions[0].payload, {
+            "trigger": "auto",
+            "pre_tokens": 231067,
+            "post_tokens": 3247,
+            "messages_summarized": 612,
+            "duration_ms": 32122,
+            "logical_parent_uuid": "a9",
+        })
+        self.assertEqual(compactions[0].ref["uuid"], "cb1")
+        self.assertEqual(compactions[0].ref["is_sidechain"], False)
+        self.assertEqual(
+            compactions[0].ts,
+            datetime(2026, 10, 7, 8, 0, 5, 919000, tzinfo=timezone.utc).timestamp(),
+        )
+        self.assertEqual(compactions[0].seq, 2)
+
+    def test_retains_runtime_config_record_with_epoch_millisecond_timestamp(self):
+        records = [
+            {"type": "runtime-config", "sessionId": "s1", "model": "performance",
+             "contextWindow": 272000, "reasoningEffort": None, "timestamp": 1791422285078},
+        ]
+        events = self._load_records(records)
+
+        self.assertEqual([event.type for event in events], ["RuntimeConfig"])
+        self.assertEqual(events[0].payload, {"model": "performance", "context_window": 272000})
+        self.assertEqual(events[0].ts, 1791422285.078)
+
+    def test_retains_attachment_records_with_untruncated_body_and_identity(self):
+        body = "- mcp-config: configure MCP servers.\n" + ("x" * 30000)
+        records = [
+            {
+                "type": "attachment",
+                "uuid": "at1",
+                "parentUuid": "p1",
+                "isSidechain": False,
+                "timestamp": "2026-10-07T08:00:01.000Z",
+                "version": "1.1.64",
+                "sessionId": "s1",
+                "attachment": {
+                    "type": "skill_listing",
+                    "content": body,
+                    "names": ["mcp-config"],
+                    "skillCount": 1,
+                    "isInitial": True,
+                },
+            },
+        ]
+        events = self._load_records(records)
+
+        self.assertEqual([event.type for event in events], ["Attachment"])
+        self.assertEqual(events[0].payload["attachment_type"], "skill_listing")
+        self.assertEqual(events[0].payload["attachment"]["content"], body)
+        self.assertEqual(events[0].ref["uuid"], "at1")
+        self.assertEqual(events[0].ref["parent_uuid"], "p1")
+        self.assertEqual(events[0].ref["is_sidechain"], False)
+        self.assertEqual(events[0].seq, 1)
+
+    def test_retains_attachment_records_of_unknown_type(self):
+        records = [
+            {"type": "attachment", "uuid": "at2", "timestamp": "2026-10-07T08:00:02.000Z",
+             "attachment": {"type": "brand_new_kind", "payload": {"a": 1}}},
+        ]
+        events = self._load_records(records)
+
+        self.assertEqual([event.type for event in events], ["Attachment"])
+        self.assertEqual(events[0].payload["attachment_type"], "brand_new_kind")
+        self.assertEqual(events[0].payload["attachment"], {"type": "brand_new_kind", "payload": {"a": 1}})
+        self.assertIsNone(events[0].ref["parent_uuid"])
+
+    def test_retains_active_leaf_record_for_storage_without_interpretation(self):
+        records = [
+            {"type": "active-leaf", "sessionId": "s1", "leafUuid": "leaf-9",
+             "explicit": True, "timestamp": 1791422287303},
+        ]
+        events = self._load_records(records)
+
+        self.assertEqual([event.type for event in events], ["ActiveLeaf"])
+        self.assertEqual(events[0].payload, {"leaf_uuid": "leaf-9", "explicit": True})
+        self.assertEqual(events[0].ts, 1791422287.303)
+
+    def test_retains_non_compaction_system_records_as_notices(self):
+        records = [
+            {"type": "system", "subtype": "informational", "level": "info",
+             "content": "Goal set: support qoder cli | Max turns: 100",
+             "uuid": "n1", "parentUuid": None, "isSidechain": False,
+             "timestamp": "2026-09-24T03:30:18.831Z"},
+            {"type": "system", "subtype": "api_retry", "level": "error",
+             "content": "Empty assistant completion", "error": "empty_response",
+             "error_status": None, "attempt": 1, "max_retries": 2, "retry_delay_ms": 595,
+             "uuid": "n2", "parentUuid": "cc18", "isSidechain": False,
+             "timestamp": "2026-09-24T04:02:23.906Z"},
+        ]
+        events = self._load_records(records)
+
+        self.assertEqual([event.type for event in events], ["SystemNotice", "SystemNotice"])
+        self.assertEqual(events[0].payload["subtype"], "informational")
+        self.assertEqual(events[0].payload["content"], "Goal set: support qoder cli | Max turns: 100")
+        self.assertEqual(events[0].payload["level"], "info")
+        self.assertIsNone(events[0].payload["attempt"])
+        self.assertEqual(events[1].payload["subtype"], "api_retry")
+        self.assertEqual(events[1].payload["error"], "empty_response")
+        self.assertEqual(events[1].payload["attempt"], 1)
+        self.assertEqual(events[1].payload["max_retries"], 2)
+        self.assertEqual(events[1].payload["retry_delay_ms"], 595)
+        self.assertEqual(events[1].ref["parent_uuid"], "cc18")
+
+    def test_qoder_session_declares_compaction_telemetry_available(self):
+        records = [
+            {"type": "user", "timestamp": "2026-10-07T08:00:00.000Z",
+             "message": {"content": [{"type": "text", "text": "go"}]}},
+            {"type": "system", "subtype": "compact_boundary", "uuid": "cb1",
+             "timestamp": "2026-10-07T08:00:05.000Z",
+             "compactMetadata": {"trigger": "auto", "preTokens": 900, "postTokens": 40}},
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "transcript.jsonl"
+            source.write_text("\n".join(json.dumps(r) for r in records), encoding="utf-8")
+            session = load_session(source)
+            timeline = build_timeline(session)
+
+        self.assertTrue(session.compaction_telemetry_available)
+        self.assertTrue(timeline.compaction_telemetry_available)
+        self.assertEqual(len(timeline.compactions), 1)
+
+    def test_captures_provider_telemetry_on_assistant_usage_records(self):
+        records = [
+            {"type": "assistant", "timestamp": "2026-10-07T08:00:02.000Z",
+             "message": {
+                 "model": "qoder-model",
+                 "content": [{"type": "text", "text": "done"}],
+                 "usage": {
+                     "input_tokens": 29835,
+                     "cache_creation_input_tokens": 1500,
+                     "cache_read_input_tokens": 4800,
+                     "output_tokens": 1248,
+                     "cache_creation": {"ephemeral_5m_input_tokens": 1200,
+                                        "ephemeral_1h_input_tokens": 300},
+                     "credits": 0.5861435914285714,
+                     "original_credits": 0.6,
+                     "billable": True,
+                     "request_id": "req-1",
+                     "context_usage_ratio": 0.2330859375,
+                 },
+             }},
+        ]
+        events = self._load_records(records)
+
+        usage = [event for event in events if event.type == "UsageRecord"]
+        self.assertEqual(len(usage), 1)
+        self.assertEqual(usage[0].payload, {
+            "input_other": 29835,
+            "output": 1248,
+            "input_cache_read": 4800,
+            "input_cache_creation": 1500,
+            "input_cache_creation_5m": 1200,
+            "input_cache_creation_1h": 300,
+            "model": "qoder-model",
+            "context_usage_ratio": 0.2330859375,
+            "request_id": "req-1",
+            "credits": 0.5861435914285714,
+            "original_credits": 0.6,
+            "billable": True,
+        })
+
+    def test_attaches_source_record_identity_to_every_event_from_that_record(self):
+        records = [
+            {"type": "user", "timestamp": "2026-10-07T08:00:00.000Z",
+             "uuid": "u1", "parentUuid": None, "isSidechain": False,
+             "message": {"content": [{"type": "text", "text": "go"}]}},
+            {"type": "assistant", "timestamp": "2026-10-07T08:00:02.000Z",
+             "uuid": "a1", "parentUuid": "u1", "isSidechain": False,
+             "requestTokenAnchor": {"request": "r" * 64, "response": "s" * 64,
+                                    "requestId": "req-1"},
+             "message": {
+                 "model": "qoder-model",
+                 "content": [
+                     {"type": "text", "text": "working"},
+                     {"type": "tool_use", "id": "t1", "name": "Read", "input": {}},
+                 ],
+                 "usage": {"input_tokens": 10, "output_tokens": 5, "request_id": "req-1"},
+             }},
+            # A continuation of the same request that carries no usage at all:
+            # its anchor is the only thing that ties it back to req-1.
+            {"type": "assistant", "timestamp": "2026-10-07T08:00:03.000Z",
+             "uuid": "a2", "parentUuid": "a1", "isSidechain": False,
+             "requestTokenAnchor": {"request": "r" * 64, "response": "s" * 64,
+                                    "requestId": "req-1"},
+             "message": {"model": "qoder-model",
+                         "content": [{"type": "text", "text": "more"}]}},
+        ]
+        events = self._load_records(records)
+
+        self.assertEqual(
+            [event.type for event in events],
+            ["TurnBegin", "ContentPart", "ToolCall", "UsageRecord", "ContentPart"],
+        )
+        self.assertEqual(events[0].ref, {
+            "uuid": "u1", "parent_uuid": None, "is_sidechain": False,
+            "request_id": None, "request_hash": None, "response_hash": None,
+        })
+        assistant_ref = {
+            "uuid": "a1", "parent_uuid": "u1", "is_sidechain": False,
+            "request_id": "req-1", "request_hash": "r" * 64, "response_hash": "s" * 64,
+        }
+        for event in events[1:4]:
+            self.assertEqual(event.ref, assistant_ref)
+        self.assertEqual(events[4].ref["request_id"], "req-1")
+        self.assertEqual(events[4].ref["uuid"], "a2")
+        self.assertEqual(events[4].ref["parent_uuid"], "a1")
+
+    def test_falls_back_to_usage_request_id_when_no_token_anchor_is_present(self):
+        # Qoder only began writing requestTokenAnchor in 1.1.58. Older
+        # transcripts still name the request, but only inside the usage block.
+        records = [
+            {"type": "assistant", "timestamp": "2026-08-01T00:00:00.000Z",
+             "version": "1.1.37", "uuid": "a1", "parentUuid": "u1",
+             "message": {"model": "m",
+                         "content": [{"type": "text", "text": "hi"}],
+                         "usage": {"input_tokens": 7, "output_tokens": 2,
+                                   "request_id": "req-old"}}},
+        ]
+        events = self._load_records(records)
+
+        self.assertEqual([event.type for event in events], ["ContentPart", "UsageRecord"])
+        self.assertEqual([event.ref["request_id"] for event in events], ["req-old", "req-old"])
+        self.assertIsNone(events[0].ref["request_hash"])
+        self.assertIsNone(events[0].ref["response_hash"])
+
+    def _load_records(self, records):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "transcript.jsonl"
+            source.write_text(
+                "\n".join(json.dumps(record) for record in records), encoding="utf-8"
+            )
+            return load_session(source).events
 
     def test_timeline_detects_skill_and_skill_file_read(self):
         timeline = build_timeline(self.session)
@@ -268,8 +539,11 @@ class QoderTranscriptTests(unittest.TestCase):
             tokenstats_to_dict(stats)["growth_verdict"], "unavailable (no context telemetry)"
         )
         self.assertIsNone(tokenstats_to_dict(stats)["hash_flips"])
-        self.assertIsNone(report_data["compaction_count"])
-        self.assertIn("compactions: unavailable", report)
+        # Compaction is not a context-derived metric for Qoder: the transcript
+        # records each boundary with harness-measured token counts, so an
+        # absent compaction is the fact "zero", not "unknown".
+        self.assertEqual(report_data["compaction_count"], 0)
+        self.assertIn("compactions: 0", report)
         self.assertIn("growth: unavailable (no context telemetry)", report)
         self.assertIn("prompt flips: unavailable", report)
 

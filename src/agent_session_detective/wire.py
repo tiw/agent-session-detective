@@ -40,6 +40,11 @@ class Event:
     origin: str  # "main" or "subagent:<id>"
     source: Path
     seq: int
+    # Identity of the source record this event was parsed from: uuid,
+    # parent_uuid, is_sidechain, request_id, request_hash, response_hash.
+    # Provenance rather than content, so it stays out of ``payload``; ``None``
+    # for formats whose logs carry no per-record identity.
+    ref: Optional[dict] = None
 
     def text_preview(self, limit: int = 120) -> str:
         """Short human-readable summary of the payload."""
@@ -328,6 +333,17 @@ def parse_codex_session(path: Path, origin: str = "main") -> Iterator[Event]:
 # ---------------------------------------------------------------------------
 
 def _qoder_timestamp(value: object) -> Optional[float]:
+    """Qoder mixes two timestamp encodings in one transcript.
+
+    ``user``/``assistant``/``system``/``attachment`` records use ISO-8601
+    strings; ``runtime-config`` and ``active-leaf`` use epoch milliseconds.
+    Returning ``None`` for the numeric form would sort those records after
+    every other event, since the session sort puts missing timestamps last.
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return value / 1000.0
     if not isinstance(value, str):
         return None
     try:
@@ -342,13 +358,121 @@ def _is_qoder_record(record: dict) -> bool:
     return record.get("type") in ("user", "assistant", "metadata")
 
 
+def _qoder_ref(record: dict) -> dict:
+    """Identity of one transcript record, shared by every event parsed from it.
+
+    ``requestTokenAnchor`` is the preferred per-call identity: it names every
+    record of a request, while ``usage`` appears on only about a third of them.
+    But Qoder began writing the anchor only in 1.1.58, so older transcripts fall
+    back to ``usage.request_id`` and can group just their usage-bearing records.
+    """
+    anchor = record.get("requestTokenAnchor")
+    if not isinstance(anchor, dict):
+        anchor = {}
+    request_id = anchor.get("requestId")
+    if request_id is None:
+        message = record.get("message")
+        usage = message.get("usage") if isinstance(message, dict) else None
+        if isinstance(usage, dict):
+            request_id = usage.get("request_id")
+    return {
+        "uuid": record.get("uuid"),
+        "parent_uuid": record.get("parentUuid"),
+        "is_sidechain": record.get("isSidechain"),
+        "request_id": request_id,
+        "request_hash": anchor.get("request"),
+        "response_hash": anchor.get("response"),
+    }
+
+
+def _qoder_compaction_event(record: dict, ts: Optional[float], origin: str, path: Path, seq: int) -> Optional[Event]:
+    """A ``system``/``compact_boundary`` record carries harness-measured facts.
+
+    Unlike Kimi's CompactionBegin/End pair, Qoder reports one boundary record
+    with the pre/post token counts already measured, so no inference is needed.
+    """
+    if record.get("subtype") != "compact_boundary":
+        return None
+    metadata = record.get("compactMetadata")
+    if not isinstance(metadata, dict):
+        metadata = {}
+    return Event(
+        ts,
+        "CompactionBegin",
+        {
+            "trigger": metadata.get("trigger"),
+            "pre_tokens": metadata.get("preTokens"),
+            "post_tokens": metadata.get("postTokens"),
+            "messages_summarized": metadata.get("messagesSummarized"),
+            "duration_ms": metadata.get("durationMs"),
+            "logical_parent_uuid": record.get("logicalParentUuid"),
+        },
+        origin,
+        path,
+        seq,
+        _qoder_ref(record),
+    )
+
+
+def _qoder_meta_event(record: dict, origin: str, path: Path, seq: int) -> Optional[Event]:
+    """Translate a record that carries no ``message`` into an Event.
+
+    These are the records the ``user``/``assistant`` filter used to discard.
+    They hold the facts the audit IR is built on: the compaction boundary with
+    harness-measured token counts, the runtime context window, the
+    conversation-tree leaf, and the attachment channel that carries skill
+    catalogs, full skill bodies, reminders and hook output.
+    """
+    record_type = record.get("type")
+    ts = _qoder_timestamp(record.get("timestamp"))
+    ref = _qoder_ref(record)
+    if record_type == "system":
+        compaction = _qoder_compaction_event(record, ts, origin, path, seq)
+        if compaction is not None:
+            return compaction
+        # Qoder's other ``system`` subtypes are harness log lines, not prompt
+        # content: ``informational`` (goal set, notices) and ``api_retry``
+        # (a request that produced nothing and was retried). Neither belongs in
+        # a content bucket, but both are session facts worth keeping.
+        return Event(ts, "SystemNotice", {
+            "subtype": record.get("subtype"),
+            "level": record.get("level"),
+            "content": record.get("content"),
+            "attempt": record.get("attempt"),
+            "max_retries": record.get("max_retries"),
+            "retry_delay_ms": record.get("retry_delay_ms"),
+            "error": record.get("error"),
+            "error_status": record.get("error_status"),
+        }, origin, path, seq, ref)
+    if record_type == "runtime-config":
+        return Event(ts, "RuntimeConfig", {
+            "model": record.get("model"),
+            "context_window": record.get("contextWindow"),
+        }, origin, path, seq, ref)
+    if record_type == "active-leaf":
+        return Event(ts, "ActiveLeaf", {
+            "leaf_uuid": record.get("leafUuid"),
+            "explicit": record.get("explicit"),
+        }, origin, path, seq, ref)
+    if record_type == "attachment":
+        attachment = record.get("attachment")
+        if not isinstance(attachment, dict):
+            return None
+        return Event(ts, "Attachment", {
+            "attachment_type": attachment.get("type"),
+            "attachment": attachment,
+        }, origin, path, seq, ref)
+    return None
+
+
 def parse_qoder_transcript(path: Path, origin: str = "main") -> Iterator[Event]:
     """Parse a Qoder project transcript JSONL into Events.
 
     Qoder transcripts live at ``~/.qoder/projects/<workspace>/<session>.jsonl``.
-    Each record has a top-level ``type`` (``user`` or ``assistant``) and a
-    ``message.content`` array. Subagent transcripts live under
-    ``<session>/subagents/<id>.jsonl``.
+    Message records have a top-level ``type`` of ``user`` or ``assistant`` and a
+    ``message.content`` array; the remaining record types carry session facts
+    and injected content (see :func:`_qoder_meta_event`). Subagent transcripts
+    live under ``<session>/subagents/<id>.jsonl``.
     """
     with open(path, "r", encoding="utf-8", errors="replace") as fh:
         for seq, line in enumerate(fh, start=1):
@@ -356,7 +480,12 @@ def parse_qoder_transcript(path: Path, origin: str = "main") -> Iterator[Event]:
                 record = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            if not isinstance(record, dict) or record.get("type") not in ("user", "assistant"):
+            if not isinstance(record, dict):
+                continue
+            if record.get("type") not in ("user", "assistant"):
+                meta = _qoder_meta_event(record, origin, path, seq)
+                if meta is not None:
+                    yield meta
                 continue
             message = record.get("message")
             if not isinstance(message, dict):
@@ -367,10 +496,11 @@ def parse_qoder_transcript(path: Path, origin: str = "main") -> Iterator[Event]:
             if not isinstance(content, list):
                 continue
             ts = _qoder_timestamp(record.get("timestamp"))
+            ref = _qoder_ref(record)
             if record["type"] == "user":
                 user_input = [part for part in content if isinstance(part, dict) and part.get("type") == "text"]
                 if user_input:
-                    yield Event(ts, "TurnBegin", {"user_input": user_input}, origin, path, seq)
+                    yield Event(ts, "TurnBegin", {"user_input": user_input}, origin, path, seq, ref)
                 for part in content:
                     if isinstance(part, dict) and part.get("type") == "tool_result":
                         yield Event(ts, "ToolResult", {
@@ -379,15 +509,15 @@ def parse_qoder_transcript(path: Path, origin: str = "main") -> Iterator[Event]:
                                 "output": part.get("content", ""),
                                 "is_error": bool(part.get("is_error", False)),
                             },
-                        }, origin, path, seq)
+                        }, origin, path, seq, ref)
                 continue
             for part in content:
                 if not isinstance(part, dict):
                     continue
                 if part.get("type") == "text":
-                    yield Event(ts, "ContentPart", {"type": "text", "text": part.get("text", "")}, origin, path, seq)
+                    yield Event(ts, "ContentPart", {"type": "text", "text": part.get("text", "")}, origin, path, seq, ref)
                 elif part.get("type") == "thinking":
-                    yield Event(ts, "ContentPart", {"type": "think", "think": part.get("thinking", "")}, origin, path, seq)
+                    yield Event(ts, "ContentPart", {"type": "think", "think": part.get("thinking", "")}, origin, path, seq, ref)
                 elif part.get("type") == "tool_use":
                     yield Event(ts, "ToolCall", {
                         "id": part.get("id"),
@@ -395,16 +525,26 @@ def parse_qoder_transcript(path: Path, origin: str = "main") -> Iterator[Event]:
                             "name": part.get("name"),
                             "arguments": json.dumps(part.get("input") or {}, ensure_ascii=False),
                         },
-                    }, origin, path, seq)
+                    }, origin, path, seq, ref)
             usage = message.get("usage")
             if isinstance(usage, dict):
+                cache_creation = usage.get("cache_creation")
+                if not isinstance(cache_creation, dict):
+                    cache_creation = {}
                 yield Event(ts, "UsageRecord", {
                     "input_other": usage.get("input_tokens", 0),
                     "output": usage.get("output_tokens", 0),
                     "input_cache_read": usage.get("cache_read_input_tokens", 0),
                     "input_cache_creation": usage.get("cache_creation_input_tokens", 0),
+                    "input_cache_creation_5m": cache_creation.get("ephemeral_5m_input_tokens", 0),
+                    "input_cache_creation_1h": cache_creation.get("ephemeral_1h_input_tokens", 0),
                     "model": message.get("model", record.get("model", "")),
-                }, origin, path, seq)
+                    "context_usage_ratio": usage.get("context_usage_ratio"),
+                    "request_id": usage.get("request_id"),
+                    "credits": usage.get("credits"),
+                    "original_credits": usage.get("original_credits"),
+                    "billable": usage.get("billable"),
+                }, origin, path, seq, ref)
 
 
 # ---------------------------------------------------------------------------
@@ -467,8 +607,10 @@ def load_session(directory: Path) -> Session:
             session.events.sort(key=lambda e: (e.ts is None, e.ts or 0.0, e.seq))
             return session
         else:
-            # Default to Qoder transcript format
-            session = Session(directory=directory.parent, compaction_telemetry_available=False)
+            # Default to Qoder transcript format. Qoder records every compaction
+            # as a system/compact_boundary record with harness-measured token
+            # counts, so the telemetry is available rather than inferred.
+            session = Session(directory=directory.parent, compaction_telemetry_available=True)
             session.events.extend(parse_qoder_transcript(directory))
             # Look for Qoder subagent transcripts in two possible locations:
             # 1. <session_dir>/<session_stem>/subagents/*.jsonl
