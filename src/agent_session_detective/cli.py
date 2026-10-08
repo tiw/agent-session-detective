@@ -1,4 +1,4 @@
-"""CLI entry point: audit a Kimi Code session and render the HTML report."""
+"""CLI entry point: audit an agent session and render the HTML report."""
 
 from __future__ import annotations
 
@@ -14,10 +14,16 @@ from .judge import Judge, judge_session
 from .report import render_report
 from .timeline import build_timeline
 from .tokenstats import build_token_stats
-from .wire import find_latest_qoder_transcript, find_latest_session, load_session
+from .wire import (
+    find_latest_codex_session,
+    find_latest_qoder_transcript,
+    find_latest_session,
+    load_session,
+)
 
 DEFAULT_SESSIONS_ROOT = "~/.kimi/sessions"
 DEFAULT_QODER_PROJECTS_ROOT = "~/.qoder/projects"
+DEFAULT_CODEX_SESSIONS_ROOT = "~/.codex/sessions"
 
 
 def main(argv=None) -> int:
@@ -29,7 +35,8 @@ def main(argv=None) -> int:
         "session",
         nargs="?",
         default=None,
-        help="Session source (a Kimi session directory or Qoder .jsonl transcript). Defaults to the most recent session.",
+        help="Session source (a Kimi session directory, Qoder .jsonl transcript, "
+             "or Codex .jsonl rollout). Defaults to the most recent session.",
     )
     parser.add_argument(
         "--sessions-root",
@@ -39,7 +46,8 @@ def main(argv=None) -> int:
     parser.add_argument("--skills-dir", action="append", default=None,
                         help="Extra skill directory to include in the catalog (repeatable).")
     parser.add_argument("--out", default=None,
-                        help="Report output path (default: <Kimi session>/skill-audit.html or <Qoder transcript>.skill-audit.html).")
+                        help="Report output path (default: <session>/skill-audit.html "
+                             "or <transcript>.skill-audit.html).")
     parser.add_argument("--open", action="store_true", help="Open the report in a browser.")
     parser.add_argument("--no-judge", action="store_true", help="Skip LLM trigger judging.")
     parser.add_argument("--expect", default=None,
@@ -69,7 +77,13 @@ def main(argv=None) -> int:
         qoder_transcript = find_latest_qoder_transcript(
             Path(DEFAULT_QODER_PROJECTS_ROOT).expanduser()
         )
-        candidates = [path for path in (kimi_session, qoder_transcript) if path is not None]
+        codex_session = find_latest_codex_session(
+            Path(DEFAULT_CODEX_SESSIONS_ROOT).expanduser()
+        )
+        candidates = [
+            path for path in (kimi_session, qoder_transcript, codex_session)
+            if path is not None
+        ]
         session_source = max(candidates, key=_session_source_mtime) if candidates else None
     has_log = session_source is not None and (
         (session_source.is_file() and session_source.suffix == ".jsonl")

@@ -64,9 +64,13 @@ class QoderCliTests(unittest.TestCase):
             shutil.copy(FIXTURES / "qoder-transcript.jsonl", transcript)
             os.utime(kimi_wire, (100, 100))
             os.utime(transcript, (200, 200))
+            codex_root = base / "codex"  # empty to avoid picking up real sessions
+            codex_root.mkdir(parents=True)
             output = base / "report.html"
 
-            with patch.object(cli, "DEFAULT_QODER_PROJECTS_ROOT", str(qoder_root)), patch(
+            with patch.object(cli, "DEFAULT_QODER_PROJECTS_ROOT", str(qoder_root)), patch.object(
+                cli, "DEFAULT_CODEX_SESSIONS_ROOT", str(codex_root)
+            ), patch(
                 "agent_session_detective.cli.render_report", return_value="<html>report</html>"
             ) as render:
                 exit_code = cli.main([

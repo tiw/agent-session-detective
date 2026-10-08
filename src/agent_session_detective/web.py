@@ -25,7 +25,7 @@ from .wire import Session, find_latest_session, load_session
 
 WEBAPP_DIR = Path(__file__).parent / "webapp"
 
-DEFAULT_ROOTS = ["~/.kimi-code/sessions", "~/.kimi/sessions", "~/.qoder/projects"]
+DEFAULT_ROOTS = ["~/.kimi-code/sessions", "~/.kimi/sessions", "~/.qoder/projects", "~/.codex/sessions"]
 
 CACHE_DIR = Path("~/.cache/agent-session-detective").expanduser()
 
@@ -337,6 +337,22 @@ def discover_sessions(roots: Optional[List[str]] = None) -> List[dict]:
                 "id": sid,
                 "path": str(transcript),
                 "workspace": transcript.parent.name,
+                "mtime": mtime,
+            }
+        # Codex sessions: <root>/YYYY/MM/DD/rollout-*.jsonl
+        for codex_file in base.glob("*/*/*/*.jsonl"):
+            try:
+                mtime = codex_file.stat().st_mtime
+            except OSError:
+                continue
+            sid = codex_file.stem
+            source_key = "codex:%s" % codex_file.resolve()
+            if source_key in found and found[source_key]["mtime"] >= mtime:
+                continue
+            found[source_key] = {
+                "id": sid,
+                "path": str(codex_file),
+                "workspace": codex_file.parent.name,  # date folder
                 "mtime": mtime,
             }
     return sorted(found.values(), key=lambda s: -s["mtime"])

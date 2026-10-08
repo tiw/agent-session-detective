@@ -4,6 +4,8 @@
 
 `asd` 读取一次 agent 会话的原始日志，重建 skill 的完整生命周期（加载、上下文开销、被压缩挤出），用 LLM 反事实判断找出**本该触发却从未加载**的 skill，最后渲染成一个自包含的交互式 HTML 报告。
 
+支持 Kimi Code（CLI 和桌面版）、Qoder transcript 和 Codex session 三种格式。
+
 纯标准库实现，零第三方依赖。
 
 ---
@@ -61,6 +63,10 @@ PYTHONPATH=src python3 -m agent_session_detective ~/.kimi-code/sessions/wd_xxx/s
 # 审计指定的 Qoder transcript
 PYTHONPATH=src python3 -m agent_session_detective \
   ~/.qoder/projects/<workspace>/<session>.jsonl --no-judge
+
+# 审计指定的 Codex session
+PYTHONPATH=src python3 -m agent_session_detective \
+  ~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<id>.jsonl --no-judge
 ```
 
 省略 `session` 时，会在 Kimi 会话和 `~/.qoder/projects` 下的 Qoder transcript 中选择最近修改的一份。
@@ -188,6 +194,8 @@ JSON API 也可以独立使用（`GET /api/sessions`（最近 10 个，纯发现
 
 Qoder transcript 支持提取对话、工具和 skill 事实，以及其中存在的 usage 记录；上下文测量、压缩事件和 prompt/tool 哈希在该格式中不可用，报告会显示为不可用，不会用推断值替代。
 
+Codex session 支持提取对话、工具调用、推理摘要和 token usage 记录；上下文测量、压缩事件和 prompt/tool 哈希在该格式中不可用，报告会显示为不可用，不会用推断值替代。
+
 skill 的识别有两条独立路径，报告里分开呈现：
 
 1. **正式加载** —— `Skill` 工具调用（带返回内容快照）
@@ -246,7 +254,7 @@ skill catalog 从 `~/.agents/skills` 和 `~/.kimi/skills` 扫描，可用 `--ski
 ## 已知限制
 
 - **只读日志，不插桩**——历史会话可审计，但精度受限于日志本身记录了什么。日志不记录"skill 被丢弃"，所以挤出只能标注为推断。
-- **支持 Kimi Code 的两种格式和 Qoder transcript**。Claude Code 和框架无关的中间格式未实现。
+- **支持 Kimi Code 的两种格式、Qoder transcript 和 Codex session**。Claude Code 和框架无关的中间格式未实现。
 - **跨会话只有轻量 fleet 聚合**（web 会话列表上方的汇总条），不做趋势存储和历史对比；一次深度审计仍然只针对一个会话。
 - **"加载了但没遵守"是独立的一条轴**：`--steps` 的分数衡量的是"规定动作执行度"，被 playbook 明文授权、带 `skip: <原因>` 的跳过**仍然计 0 分**。这是有意的——判断遵守度需要 `--steps` 评分和 `--expect` 清单两个轴一起看。
 - **`if_eval` 的步骤解析比较挑格式**：只认顶格的 `N. ` 编号行，缩进续行会被拼接。
