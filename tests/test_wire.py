@@ -5,8 +5,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from agent_session_detective.report import render_report
-from agent_session_detective.timeline import build_timeline
-from agent_session_detective.tokenstats import build_token_stats
+from agent_session_detective.timeline import build_timeline, estimate_tokens
+from agent_session_detective.tokenstats import BUCKET_KEYS, build_token_stats
 from agent_session_detective.web import timeline_to_dict, tokenstats_to_dict
 from agent_session_detective.wire import find_latest_qoder_transcript, load_session
 
@@ -147,6 +147,97 @@ class QoderTranscriptTests(unittest.TestCase):
         self.assertEqual([row.added for row in stats.turn_growth], [50, None])
         self.assertTrue(stats.bucket_totals)
         self.assertEqual(timeline_to_dict(timeline)["compaction_count"], 0)
+
+    def test_bucket_split_separates_skill_inject_and_tool(self):
+        inject = "<system-reminder>The user selected these skills: brainstorming.</system-reminder>"
+        human = "audit this trace"
+        skill_body = '<skill_content name="superpowers:brainstorming">explore the design space</skill_content>'
+        messages = [
+            {"timestamp": 0.5, "message": {"type": "StatusUpdate", "payload": {
+                "context_tokens": 1000,
+            }}},
+            {"timestamp": 1, "message": {"type": "TurnBegin", "payload": {
+                "user_input": [{"type": "text", "text": inject + human}],
+            }}},
+            {"timestamp": 1.2, "message": {"type": "ToolCall", "payload": {
+                "id": "call-skill",
+                "function": {"name": "Skill", "arguments": '{"skill": "superpowers:brainstorming"}'},
+            }}},
+            {"timestamp": 1.3, "message": {"type": "ToolResult", "payload": {
+                "tool_call_id": "call-skill",
+                "return_value": {"output": skill_body, "is_error": False},
+            }}},
+            {"timestamp": 1.4, "message": {"type": "ToolResult", "payload": {
+                "tool_call_id": "call-bash",
+                "return_value": {"output": "README.md src tests", "is_error": False},
+            }}},
+            {"timestamp": 1.6, "message": {"type": "ContentPart", "payload": {
+                "type": "text", "text": "here is what I found",
+            }}},
+            {"timestamp": 2, "message": {"type": "StatusUpdate", "payload": {
+                "context_tokens": 5000,
+            }}},
+            {"timestamp": 2.5, "message": {"type": "TurnBegin", "payload": {
+                "user_input": [{"type": "text", "text": "next"}],
+            }}},
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            session_dir = Path(directory) / "workspace" / "session"
+            session_dir.mkdir(parents=True)
+            (session_dir / "wire.jsonl").write_text(
+                "\n".join(json.dumps(message) for message in messages), encoding="utf-8"
+            )
+            session = load_session(session_dir)
+
+        stats = build_token_stats(session, build_timeline(session))
+        row = stats.turn_growth[0]
+
+        self.assertEqual(row.added, 4000)
+        self.assertEqual(row.inject_added, estimate_tokens(inject))
+        self.assertEqual(row.history_added, estimate_tokens(human))
+        self.assertEqual(row.skill_added, estimate_tokens(skill_body))
+        self.assertEqual(row.tool_added, estimate_tokens("README.md src tests"))
+        self.assertEqual(row.output_added, estimate_tokens("here is what I found"))
+        self.assertEqual(
+            row.system_added,
+            4000 - (row.inject_added + row.history_added + row.skill_added
+                    + row.tool_added + row.output_added),
+        )
+        self.assertEqual(list(stats.bucket_totals), list(BUCKET_KEYS))
+        self.assertEqual({it.bucket for it in row.items}, {"history", "inject", "skill", "tool", "output"})
+
+        serialized = tokenstats_to_dict(stats)["turn_growth"][0]
+        for key in BUCKET_KEYS:
+            self.assertEqual(serialized[key + "_added"], getattr(row, key + "_added"))
+
+    def test_skill_body_is_bucketed_by_content_signature_without_the_call_envelope(self):
+        skill_body = '<skill_content name="demo">steps the harness forgot to tag</skill_content>'
+        messages = [
+            {"timestamp": 0.5, "message": {"type": "StatusUpdate", "payload": {"context_tokens": 100}}},
+            {"timestamp": 1, "message": {"type": "TurnBegin", "payload": {
+                "user_input": [{"type": "text", "text": "go"}],
+            }}},
+            {"timestamp": 1.2, "message": {"type": "ToolResult", "payload": {
+                "tool_call_id": "call-untracked",
+                "return_value": {"output": skill_body, "is_error": False},
+            }}},
+            {"timestamp": 2, "message": {"type": "StatusUpdate", "payload": {"context_tokens": 900}}},
+            {"timestamp": 2.5, "message": {"type": "TurnBegin", "payload": {
+                "user_input": [{"type": "text", "text": "next"}],
+            }}},
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            session_dir = Path(directory) / "workspace" / "session"
+            session_dir.mkdir(parents=True)
+            (session_dir / "wire.jsonl").write_text(
+                "\n".join(json.dumps(message) for message in messages), encoding="utf-8"
+            )
+            session = load_session(session_dir)
+
+        row = build_token_stats(session, build_timeline(session)).turn_growth[0]
+
+        self.assertEqual(row.skill_added, estimate_tokens(skill_body))
+        self.assertEqual(row.tool_added, 0)
 
     def test_qoder_without_context_telemetry_omits_context_derived_metrics(self):
         records = [

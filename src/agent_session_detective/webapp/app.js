@@ -49,7 +49,8 @@
     "tokens":
       "token 治理四指标，全部从日志确定性抽取：缓存命中率（usage.record / token_usage，" +
       "全 agent 合计）；每轮增量形状（linear = 每轮加恒定 token，sublinear = 增量在缩，" +
-      "accelerating = 增量在涨）；四桶分解（system 桶是残差推断，其余是按事件内容估的）；" +
+      "accelerating = 增量在涨）；六桶分解（system 桶是残差推断；skill = 技能正文，" +
+      "inject = harness 包裹进你输入里的内容，tool = 其余工具结果，都按事件内容估）；" +
       "prompt 哈希翻转（llm.request 的 systemPromptHash/toolsHash 中途变化 = 前缀缓存失效）。" +
       "点击柱子的柱子可以下钻：该轮每个桶各加了多少、注入的具体是什么内容。"
   };
@@ -364,12 +365,21 @@
 
   var currentTurnGrowth = [];
 
+  // must match tokenstats.BUCKET_KEYS; the seg-<key> colors live in style.css
+  var BUCKETS = ["system", "history", "inject", "skill", "tool", "output"];
+  var BUCKET_NAMES = {
+    system: "system（残差，推断）",
+    history: "history（你的输入）",
+    inject: "inject（harness 注入）",
+    skill: "skill（技能正文）",
+    tool: "tool（工具结果）",
+    output: "output（模型产出）"
+  };
+
   function turnDetailHtml(r) {
-    var names = { system: "system（残差，推断）", history: "history（你的输入）",
-                  injected: "injected（工具注入）", output: "output（模型产出）" };
     var head = "<strong>T" + r.turn + "</strong> · +" + r.added + " tokens · 上下文至 " +
       r.context_at_start + (r.exact ? "" : "（插值）");
-    var blocks = ["system", "history", "injected", "output"].map(function (k) {
+    var blocks = BUCKETS.map(function (k) {
       var sub = r[k + "_added"] || 0;
       if (k !== "system" && sub <= 0) return "";
       var share = r.added ? Math.round(sub / r.added * 100) : 0;
@@ -385,8 +395,8 @@
             esc((it.preview || "").slice(0, 120)) + "</div>";
         }).join("");
       }
-      return "<details" + (k === "injected" ? " open" : "") + "><summary>" +
-        '<span class="seg-' + k + '"></span>' + esc(names[k]) + " · " + sub +
+      return "<details" + (k === "tool" ? " open" : "") + "><summary>" +
+        '<span class="seg-' + k + '"></span>' + esc(BUCKET_NAMES[k]) + " · " + sub +
         "（" + share + "%）" + (rows.length ? " · " + rows.length + " 项" : "") +
         "</summary>" + body + "</details>";
     }).join("");
@@ -448,7 +458,7 @@
     parts.push("<div class='session-meta'>" + badges.join("") + "</div>");
 
     if (t.bucket_shares && Object.keys(t.bucket_shares).length) {
-      var order = ["system", "history", "injected", "output"];
+      var order = BUCKETS;
       var rows = order.map(function (k) {
         return "<tr><td>" + esc(k) + (k === "system" ? "（残差，推断）" : "") + "</td><td>" +
           (t.bucket_totals[k] || 0) + "</td><td>" +
@@ -462,7 +472,9 @@
         currentTurnGrowth = grew;
         var maxAdded = Math.max.apply(null, grew.map(function (r) { return r.added; })) || 1;
         var bars = grew.map(function (r) {
-          var observed = r.system_added + r.history_added + r.injected_added + r.output_added;
+          var observed = order.reduce(function (acc, k) {
+            return acc + (r[k + "_added"] || 0);
+          }, 0);
           var scale = observed ? Math.min(1, r.added / observed) : 1;
           var segs = order.map(function (k) {
             var v = (r[k + "_added"] || 0) * scale;

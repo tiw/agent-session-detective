@@ -21,6 +21,8 @@
   --warn: #f5a524;
   --bad: #f4504c;
   --fact: #58a6ff;
+  --inject: #a78bfa;
+  --skill: #f472b6;
 }
 
 * { box-sizing: border-box; }
@@ -351,13 +353,14 @@ blockquote {
 .bar-seg { display: block; width: 100%; opacity: 0.85; }
 .seg-system { background: var(--warn); }
 .seg-history { background: var(--fact); }
-.seg-injected { background: var(--bad); }
+.seg-inject { background: var(--inject); }
+.seg-skill { background: var(--skill); }
+.seg-tool { background: var(--bad); }
 .seg-output { background: var(--ok); }
 .bar-legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 11.5px; color: var(--dim); }
-.bar-legend .seg-system, .bar-legend .seg-history,
-.bar-legend .seg-injected, .bar-legend .seg-output,
-#turn-detail .seg-system, #turn-detail .seg-history,
-#turn-detail .seg-injected, #turn-detail .seg-output {
+/* swatch geometry is shared by every bucket, so select on the prefix instead
+   of enumerating them — a new bucket then needs only a color above */
+.bar-legend [class*="seg-"], #turn-detail [class*="seg-"] {
   display: inline-block; width: 8px; height: 8px; border-radius: 2px;
   margin-right: 4px; opacity: 0.85; vertical-align: 0;
 }

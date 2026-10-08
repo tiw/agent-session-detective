@@ -8,21 +8,37 @@ residual of "context growth minus observed content" — always labeled as
 inferred, never presented as log fact. Turns crossed by a compaction are
 excluded from growth and bucket math because the delta no longer reflects
 content addition.
+
+``skill`` and ``inject`` are kept out of ``tool`` on purpose: a skill body is
+resident instruction and a harness wrapper is context the person never typed,
+so folding either into the tool-result bucket hides exactly the footprint a
+skill audit exists to measure.
 """
 
 from __future__ import annotations
 
 import hashlib
+import re
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
-from .timeline import Timeline, estimate_tokens
+from .timeline import Timeline, estimate_tokens, is_skill_call, skill_name_from_content
 from .wire import Event, Session
 
 # Tool results smaller than this are not checked for repeat injection.
 MIN_REPEAT_CHARS = 200
 
-BUCKET_KEYS = ("system", "history", "injected", "output")
+# Harness-authored blocks riding inside a user message. Injection is
+# recognised by content signature, not by the call envelope: the envelope is
+# an ordinary user turn either way, so only the wrapper gives it away.
+INJECT_BLOCK_RE = re.compile(
+    r"<(system-reminder|system_reminder|restored_files|user-prompt-submit-hook"
+    r"|command-name|command-message|command-args|local-command-stdout)\b[^>]*>"
+    r".*?</\1\s*>",
+    re.IGNORECASE | re.DOTALL,
+)
+
+BUCKET_KEYS = ("system", "history", "inject", "skill", "tool", "output")
 
 
 @dataclass
@@ -68,8 +84,10 @@ class TurnGrowth:
     exact: bool  # False = interpolated from the status series (CLI format)
     added: Optional[int] = None  # context growth until the next turn starts
     system_added: int = 0  # residual, inferred
-    history_added: int = 0  # user turns, token estimate
-    injected_added: int = 0  # tool results, token estimate
+    history_added: int = 0  # what the person typed, token estimate
+    inject_added: int = 0  # harness-authored blocks in a user turn
+    skill_added: int = 0  # skill bodies, by call name or content signature
+    tool_added: int = 0  # every other tool result
     output_added: int = 0  # model content parts, token estimate
     crossed_compaction: bool = False
     items: List[TurnItem] = field(default_factory=list)
@@ -205,9 +223,6 @@ def _turn_contexts(session: Session) -> List[Tuple[int, bool]]:
 
 
 def _event_text(e: Event) -> str:
-    if e.type == "TurnBegin":
-        parts = e.payload.get("user_input") or []
-        return "".join(p.get("text", "") for p in parts if isinstance(p, dict))
     if e.type == "ToolResult":
         return str(e.payload.get("return_value", {}).get("output") or "")
     if e.type == "ContentPart":
@@ -219,6 +234,21 @@ def _event_text(e: Event) -> str:
 def _preview(text: str, limit: int = 160) -> str:
     one_line = " ".join(str(text).split())
     return one_line[:limit]
+
+
+def _split_user_input(event: Event) -> Tuple[str, str]:
+    """(what the person typed, what the harness wrapped around it)."""
+    human: List[str] = []
+    injected: List[str] = []
+    for part in event.payload.get("user_input") or []:
+        if not isinstance(part, dict):
+            continue
+        text = str(part.get("text") or "")
+        if not text:
+            continue
+        injected.extend(m.group(0) for m in INJECT_BLOCK_RE.finditer(text))
+        human.append(INJECT_BLOCK_RE.sub("", text))
+    return "".join(human), "".join(injected)
 
 
 def _has_context_measurement(session: Session) -> bool:
@@ -244,7 +274,15 @@ def _turn_growth(session: Session, timeline: Timeline) -> List[TurnGrowth]:
     contexts = _turn_contexts(session)
     n = len(turns)
     comp_starts = [c.begin_ts for c in timeline.compactions if c.begin_ts]
-    sums = [{"history": 0, "injected": 0, "output": 0} for _ in range(n)]
+    skill_ids = {
+        str(e.payload.get("id"))
+        for e in session.events
+        if e.origin == "main" and is_skill_call(e)
+    }
+    sums = [
+        {"history": 0, "inject": 0, "skill": 0, "tool": 0, "output": 0}
+        for _ in range(n)
+    ]
     items: List[List[TurnItem]] = [[] for _ in range(n)]
     for e in session.events:
         if e.origin != "main" or e.ts is None or n == 0:
@@ -257,13 +295,25 @@ def _turn_growth(session: Session, timeline: Timeline) -> List[TurnGrowth]:
         if idx is None:
             continue
         if e.type == "TurnBegin":
-            text = _event_text(e)
-            sums[idx]["history"] += estimate_tokens(text)
-            items[idx].append(TurnItem("history", estimate_tokens(text), _preview(text)))
+            for bucket, text in zip(("history", "inject"), _split_user_input(e)):
+                tokens = estimate_tokens(text)
+                if not tokens:
+                    continue
+                sums[idx][bucket] += tokens
+                items[idx].append(TurnItem(bucket, tokens, _preview(text)))
         elif e.type == "ToolResult":
             text = _event_text(e)
-            sums[idx]["injected"] += estimate_tokens(text)
-            items[idx].append(TurnItem("injected", estimate_tokens(text), _preview(text)))
+            tokens = estimate_tokens(text)
+            call_id = str(e.payload.get("tool_call_id"))
+            # A skill body is not a tool result: it is resident instruction.
+            # Envelope first, content signature as the fallback arm.
+            bucket = (
+                "skill"
+                if call_id in skill_ids or skill_name_from_content(text)
+                else "tool"
+            )
+            sums[idx][bucket] += tokens
+            items[idx].append(TurnItem(bucket, tokens, _preview(text)))
         elif e.type == "ContentPart":
             text = _event_text(e)
             if text:
@@ -284,13 +334,13 @@ def _turn_growth(session: Session, timeline: Timeline) -> List[TurnGrowth]:
             if not row.crossed_compaction and row.added >= 0:
                 observed = sums[i]
                 row.history_added = observed["history"]
-                row.injected_added = observed["injected"]
+                row.inject_added = observed["inject"]
+                row.skill_added = observed["skill"]
+                row.tool_added = observed["tool"]
                 row.output_added = observed["output"]
                 # Whatever grew the context beyond observable content is
                 # attributed to the system bucket — residual, inferred.
-                row.system_added = max(
-                    0, row.added - (observed["history"] + observed["injected"] + observed["output"])
-                )
+                row.system_added = max(0, row.added - sum(observed.values()))
         row.items = items[i]
         rows.append(row)
     return rows
@@ -375,10 +425,8 @@ def build_token_stats(session: Session, timeline: Timeline) -> TokenStats:
     for r in stats.turn_growth:
         if r.added is None or r.added < 0 or r.crossed_compaction:
             continue
-        totals["system"] += r.system_added
-        totals["history"] += r.history_added
-        totals["injected"] += r.injected_added
-        totals["output"] += r.output_added
+        for key in BUCKET_KEYS:
+            totals[key] += getattr(r, key + "_added")
     total_added = sum(totals.values())
     if total_added:
         stats.bucket_totals = totals

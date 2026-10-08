@@ -19,7 +19,8 @@ from .wire import Session
 
 CSS = """
 :root { --ink:#1a1d21; --dim:#5b6470; --line:#e3e6ea; --fact:#0b6bcb;
-        --warn:#b25e09; --bad:#c0392b; --ok:#1e7d46; --bg:#f7f8fa; }
+        --warn:#b25e09; --bad:#c0392b; --ok:#1e7d46; --bg:#f7f8fa;
+        --inject:#7048e8; --skill:#c2255c; }
 * { box-sizing:border-box; }
 body { font:15px/1.6 -apple-system,"SF Pro","PingFang SC",sans-serif;
        color:var(--ink); margin:0; background:#fff; }
@@ -86,8 +87,10 @@ def _context_sparkline(timeline: Timeline) -> str:
 
 BUCKET_STYLE = {
     "system": ("var(--warn)", "system resident (residual, inferred)"),
-    "history": ("var(--fact)", "dialogue history (user turns, estimate)"),
-    "injected": ("var(--bad)", "retrieval/tool injection (tool results, estimate)"),
+    "history": ("var(--fact)", "what you typed (estimate)"),
+    "inject": ("var(--inject)", "harness-injected context (system reminders, hooks, estimate)"),
+    "skill": ("var(--skill)", "skill bodies (load or content signature, estimate)"),
+    "tool": ("var(--bad)", "tool results (estimate)"),
     "output": ("var(--ok)", "model output (content parts, estimate)"),
 }
 
@@ -110,7 +113,7 @@ def _growth_chart(stats: TokenStats) -> str:
     for i, r in enumerate(rows):
         x = i * bar_w
         y = height
-        observed = r.system_added + r.history_added + r.injected_added + r.output_added
+        observed = sum(getattr(r, key + "_added") for key in BUCKET_KEYS)
         # token estimates can overshoot the measured delta; scale the bar
         # back down so segments stay proportional to the actual growth
         scale = min(1.0, (r.added or 0) / observed) if observed else 1.0
@@ -185,8 +188,11 @@ def _render_token_governance(stats: TokenStats) -> str:
         out.append(
             "<p class='meta'>buckets are token estimates from event content; the system "
             "bucket is the residual of context growth minus observed content (inferred), "
-            "so estimation error lands there too. Desktop logs measure per-turn context "
-            "exactly; CLI logs interpolate from the status series.</p>"
+            "so estimation error and the tool-schema definitions this log never records "
+            "both land there. skill and inject are split out of tool on purpose: a skill "
+            "body is resident instruction and a harness wrapper is context nobody typed. "
+            "Desktop logs measure per-turn context exactly; CLI logs interpolate from the "
+            "status series.</p>"
         )
 
     if stats.hash_runs:

@@ -20,7 +20,7 @@ from .catalog import load_catalog
 from .if_eval import IFResult, evaluate_playbook
 from .judge import Judge, Judgment, judge_session
 from .timeline import Timeline, build_timeline
-from .tokenstats import TokenStats, build_token_stats
+from .tokenstats import BUCKET_KEYS, TokenStats, build_token_stats
 from .wire import Session, find_latest_session, load_session
 
 WEBAPP_DIR = Path(__file__).parent / "webapp"
@@ -179,10 +179,7 @@ def tokenstats_to_dict(s: TokenStats) -> dict:
                 "context_at_start": r.context_at_start,
                 "exact": r.exact,
                 "added": r.added,
-                "system_added": r.system_added,
-                "history_added": r.history_added,
-                "injected_added": r.injected_added,
-                "output_added": r.output_added,
+                **{key + "_added": getattr(r, key + "_added") for key in BUCKET_KEYS},
                 "crossed_compaction": r.crossed_compaction,
                 # drill-down: biggest contributors first, capped; previews only
                 "items": [

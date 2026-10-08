@@ -18,6 +18,7 @@ from .wire import Event, Session
 
 SKILL_TOOL_NAMES = {"skill", "skill_loaded"}
 SKILL_FILE_RE = re.compile(r"SKILL\.md", re.IGNORECASE)
+SKILL_CONTENT_RE = re.compile(r'<skill_content\s+name="([^"]+)"')
 CJK_RE = re.compile(r"[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]")
 
 
@@ -106,6 +107,26 @@ def _skill_file_path(arguments: str) -> Optional[str]:
         return None
     path = str(parsed.get("path") or parsed.get("file_path") or "")
     return path if SKILL_FILE_RE.search(path) else None
+
+
+def is_skill_call(event: Event) -> bool:
+    """A ToolCall that consumes skill content: a formal Skill load, or a
+    SKILL.md read as a plain file."""
+    if event.type != "ToolCall":
+        return False
+    fn = event.payload.get("function", {})
+    name = str(fn.get("name", "")).lower()
+    if name in SKILL_TOOL_NAMES:
+        return True
+    return name == "read" and _skill_file_path(str(fn.get("arguments", ""))) is not None
+
+
+def skill_name_from_content(text: str) -> str:
+    """Content-signature fallback for a skill body whose envelope was trimmed
+    or whose tool name is not ``skill``. A missed tag costs a whole bucket;
+    a content guess costs one row, so guess."""
+    match = SKILL_CONTENT_RE.search(text or "")
+    return match.group(1) if match else ""
 
 
 def build_timeline(session: Session) -> Timeline:

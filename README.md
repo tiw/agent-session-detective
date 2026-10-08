@@ -152,7 +152,7 @@ JSON API 也可以独立使用（`GET /api/sessions`（最近 10 个，纯发现
 | **expectations** | 按路由规则该被消费的 skill 清单 | `loaded` = 经 Skill 工具正式加载；`file-read` = SKILL.md 被当文件读过（kimi-code 下是绕过机制，codex 下是正规方式，**harness 相对**）；`missing` = 都没有，路由没走的第一信号 |
 | **findings** | 本该触发却从未加载的 skill | 判定是 LLM 反事实推理（**判断**）；证据是从会话原文的逐字引用（**可核对的事实**）。无证据或证据非原文的判定被丢弃计为工具缺陷——缺陷多时先怀疑解析器，别急着怀疑 agent |
 | **instruction following** | 所选 playbook 每个编号步骤的执行判定 | `covered` = 轨迹里有实际行动/结果；`partial` = 做了一部分；`skipped` = 未执行。**带 skip 理由也计 skipped**——这轴度量步骤执行度，不度量裁量合规（那看 expectations）。覆盖率由判定重算，不信模型自报 |
-| **token governance** | 第 0 步审计的四指标 | 缓存命中率（usage 记录，全 agent 合计）；每轮增量形状（linear / sublinear / accelerating）；四桶分解（**system 桶是残差，标注推断**，其余按事件内容估计）；prompt 哈希翻转（hash 变化是日志事实，「缓存失效」是标注的推断）。附重复注入检测：同一份工具结果被多次读入 ≈ 状态未外置 |
+| **token governance** | 第 0 步审计的四指标 | 缓存命中率（usage 记录，全 agent 合计）；每轮增量形状（linear / sublinear / accelerating）；六桶分解（**system 桶是残差，标注推断**；`skill` 技能正文与 `inject` harness 包裹进你输入里的内容单独成桶，`tool` 只装其余工具结果；其余按事件内容估计）；prompt 哈希翻转（hash 变化是日志事实，「缓存失效」是标注的推断）。附重复注入检测：同一份工具结果被多次读入 ≈ 状态未外置 |
 | **skill lifecycle** | 每次加载/直读的完整记录 | 展开可见**加载时捕获的内容快照**（之后 skill 文件改了也不影响本报告）；`evicted?` = 压缩后可能被挤出上下文（**推断**，日志从不记录这件事）。声明了 `disable-model-invocation` 的 skill 会带核对提示：日志无法区分点名与自调 |
 | **event feed** | 原始事件流（最近 400 条） | 角色 badge：`user` 人的输入、`think` 模型思考、`say` 模型回复、`tool` 调用、`result` 返回、`compact` 压缩；`[subagent:x]` 表示来自子代理 |
 
@@ -218,7 +218,7 @@ skill 的识别有两条独立路径，报告里分开呈现：
 | **Skill Lifecycle** | 每次加载：内容快照、token 估计、加载后的上下文占用、是否可能被压缩挤出 |
 | **Compactions** | 压缩事件起止时间 |
 | **Context Usage** | 上下文 token 占用的折线图（内联 SVG） |
-| **Token Governance** | 缓存命中率、每轮增量形状判定、四桶分解堆叠图（system 桶为残差推断）、prompt 哈希翻转表、重复注入检测 |
+| **Token Governance** | 缓存命中率、每轮增量形状判定、六桶分解堆叠图（system 桶为残差推断）、prompt 哈希翻转表、重复注入检测 |
 | **Event Feed** | 原始事件流，每条带时间戳和来源 |
 
 skill 展示的是**加载时捕获的内容快照**——所以即使 skill 文件后来被改了，报告仍然准确。
@@ -238,7 +238,7 @@ skill 展示的是**加载时捕获的内容快照**——所以即使 skill 文
     ├── cli.py        # 命令行入口、参数、退出码
     ├── wire.py       # 日志解析（两种格式 → 统一 Event）
     ├── timeline.py   # 事实时间线：加载、直读、压缩、token 序列
-    ├── tokenstats.py # token 治理统计：缓存、增长形状、四桶、哈希翻转、重复注入
+    ├── tokenstats.py # token 治理统计：缓存、增长形状、六桶、哈希翻转、重复注入
     ├── catalog.py    # 扫描本地 skill 目录，提取触发语料
     ├── judge.py      # 反事实触发判断
     ├── if_eval.py    # 指令遵循度评估（移植自 AWS Skill Eval）
