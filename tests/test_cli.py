@@ -1,6 +1,7 @@
 import json
 import os
 import shutil
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
@@ -215,6 +216,78 @@ class IrCliTests(unittest.TestCase):
                 [row["call_id"] for row in analyses["context_organization"]["rows"]],
                 ["main:0", "main:1", "main:2"],
             )
+
+
+BILLING_UUID = "3b241101-e2bb-4255-8caf-4136c566a962"
+
+
+class BilledUsageFlagTests(unittest.TestCase):
+    def test_billed_usage_attaches_billed_totals_to_the_ir(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            transcript = base / (BILLING_UUID + ".jsonl")
+            shutil.copy(FIXTURES / "ir" / "tier1.jsonl", transcript)
+            db = base / "local.db"
+            conn = sqlite3.connect(db)
+            conn.execute(
+                "CREATE TABLE chat_message (session_id TEXT, token_info TEXT)")
+            conn.execute("INSERT INTO chat_message VALUES (?, ?)", (
+                BILLING_UUID,
+                json.dumps({"prompt_tokens": 1000, "completion_tokens": 40,
+                            "cached_tokens": 800})))
+            conn.commit()
+            conn.close()
+
+            exit_code = cli.main([
+                str(transcript), "--no-judge", "--billed-usage",
+                "--billed-db", str(db),
+                "--ir-out", str(base / "ir.json"),
+            ])
+
+            self.assertEqual(exit_code, 0)
+            payload = json.loads((base / "ir.json").read_text(encoding="utf-8"))
+            self.assertEqual(payload["billing"]["requests"], 1)
+            self.assertEqual(payload["billing"]["prompt_tokens"], 1000)
+            self.assertEqual(payload["billing"]["cached_tokens"], 800)
+
+    def test_billed_usage_unavailable_keeps_the_audit_going(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            transcript = base / (BILLING_UUID + ".jsonl")
+            shutil.copy(FIXTURES / "ir" / "tier1.jsonl", transcript)
+
+            with patch("agent_session_detective.billing.DEFAULT_DB_PATH",
+                       str(base / "absent.db")), patch(
+                           "agent_session_detective.cli.render_report",
+                           return_value="<html>report</html>") as render:
+                exit_code = cli.main(
+                    [str(transcript), "--no-judge", "--billed-usage"])
+
+            self.assertEqual(exit_code, 0)
+            self.assertTrue(render.called)
+            document = render.call_args.kwargs["document"]
+            self.assertIsNone(document.billing)
+            self.assertTrue(any(
+                note.startswith("billed_usage: unavailable")
+                for note in document.coverage.notes))
+
+    def test_without_the_flag_no_attach_happens(self):
+        with tempfile.TemporaryDirectory() as directory:
+            transcript = Path(directory) / "foo.jsonl"
+            shutil.copy(FIXTURES / "ir" / "tier1.jsonl", transcript)
+
+            with patch("agent_session_detective.cli.render_report",
+                       return_value="<html>report</html>") as render:
+                exit_code = cli.main([str(transcript), "--no-judge"])
+
+            self.assertEqual(exit_code, 0)
+            document = render.call_args.kwargs["document"]
+            self.assertIsNone(document.billing)
+            # The tier1 fixture already emits qoder adapter notes, so the
+            # opt-in contract is "no billed_usage note", not "no notes".
+            self.assertFalse(any(
+                note.startswith("billed_usage:")
+                for note in document.coverage.notes))
 
 
 if __name__ == "__main__":

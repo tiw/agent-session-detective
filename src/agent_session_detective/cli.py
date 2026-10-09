@@ -9,6 +9,7 @@ import webbrowser
 from pathlib import Path
 from typing import List
 
+from .billing import attach_billed_usage
 from .catalog import load_catalog
 from .if_eval import IFResult, evaluate_playbook
 from .ir import build_analyses, build_audit_document
@@ -59,6 +60,12 @@ def main(argv=None) -> int:
     parser.add_argument("--tree-out", default=None, metavar="PATH",
                         help="Render the actual skill tree (agents → dispatches → "
                              "skill loads) as a standalone HTML page.")
+    parser.add_argument("--billed-usage", action="store_true",
+                        help="Attach provider-billed token totals from the local "
+                             "SharedClientCache DB (opt-in; Qoder transcripts only).")
+    parser.add_argument("--billed-db", default=None, metavar="PATH",
+                        help="Billed-usage DB path (default: Qoder SharedClientCache "
+                             "local.db).")
     parser.add_argument("--open", action="store_true", help="Open the report in a browser.")
     parser.add_argument("--no-judge", action="store_true", help="Skip LLM trigger judging.")
     parser.add_argument("--expect", default=None,
@@ -118,6 +125,8 @@ def main(argv=None) -> int:
     # load section from it. --ir-out/--ir-analyses keep serializing it
     # unchanged.
     document = build_audit_document(session, _detect_adapter(session, session_source))
+    if args.billed_usage:
+        attach_billed_usage(document, session_source, args.billed_db)
     if args.ir_out:
         _write_json(Path(args.ir_out), document.to_dict())
     if args.ir_analyses:
