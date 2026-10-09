@@ -131,7 +131,6 @@ class NoMainRootsTest(unittest.TestCase):
 class LooseSubtreeTest(unittest.TestCase):
     def test_loose_agent_renders_attachments_and_its_subtree(self):
         grandchild = "subagent:agent-gc-3333444455556666"
-        ghost = "subagent:ghost-77777777"
         out = page(
             agents=[agent(MAIN), agent(CHILD), agent(grandchild)],
             skills=[skill("loose:demo", [observation(
@@ -139,14 +138,12 @@ class LooseSubtreeTest(unittest.TestCase):
             loads=[load("child:load:1", CHILD, "loose:demo", cost=42)],
             dispatches=[dispatch("child:dispatch:1", CHILD, grandchild,
                                  "agent-gc"),
-                        dispatch("child:dispatch:2", CHILD, ghost,
-                                 "subagent"),
-                        dispatch("child:dispatch:3", CHILD, None,
+                        dispatch("child:dispatch:2", CHILD, None,
                                  "subagent")])
         self.assertIn("no incoming dispatch edge", out)
         self.assertIn("loose:demo", out)
         self.assertIn("agent-gc", out)
-        self.assertIn("orphan dispatch", out)
+        self.assertIn("no matching subagent transcript", out)
 
 
 class MissingChildTest(unittest.TestCase):
