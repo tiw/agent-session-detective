@@ -190,5 +190,22 @@ class TagBalanceTest(unittest.TestCase):
         self.assertEqual(out.count("<details"), out.count("</details>"))
 
 
+class SourcesTest(unittest.TestCase):
+    def test_sources_are_collapsed_one_per_line(self):
+        doc = document(agents=[agent(MAIN)])
+        doc.source_files = ["a6f01ae6.jsonl", "subagents/agent-x.jsonl"]
+        out = render_skill_tree(doc)
+        self.assertIn("<details class='sources'><summary>2 source transcripts"
+                      "</summary>", out)
+        self.assertIn("<li>a6f01ae6.jsonl</li>", out)
+        self.assertIn("<li>subagents/agent-x.jsonl</li>", out)
+        self.assertNotIn("a6f01ae6.jsonl ·", out)
+
+    def test_theme_uses_the_webapp_dark_tokens(self):
+        out = page(agents=[agent(MAIN)])
+        self.assertIn("#09090b", out)
+        self.assertIn("ui-monospace", out)
+
+
 if __name__ == "__main__":
     unittest.main()

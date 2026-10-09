@@ -15,39 +15,51 @@ from .ir.schema import AuditDocument
 from .ir.skill_tree import skill_tree
 
 CSS = """
-:root { --ink:#1a1d21; --dim:#5b6470; --line:#e3e6ea; --fact:#0b6bcb;
-        --warn:#b25e09; --bad:#c0392b; --ok:#1e7d46; --bg:#f7f8fa;
-        --inject:#7048e8; --skill:#c2255c; }
+:root { --bg:#09090b; --surface:#121214; --line:#26262b; --text:#f4f4f5;
+        --dim:#8e8e96; --ok:#3ddc84; --warn:#f5a524; --bad:#f4504c;
+        --fact:#58a6ff; }
 * { box-sizing:border-box; }
-body { font:15px/1.6 -apple-system,"SF Pro","PingFang SC",sans-serif;
-       color:var(--ink); margin:0; background:#fff; }
-header { background:var(--bg); border-bottom:1px solid var(--line); padding:28px 36px; }
-h1 { margin:0 0 6px; font-size:22px; }
-h2 { font-size:17px; margin:36px 0 12px; padding-top:20px; border-top:1px solid var(--line); }
-.meta { color:var(--dim); font-size:13px; }
-main { max-width:960px; margin:0 auto; padding:8px 36px 64px; }
-.badge { display:inline-block; font-size:12px; padding:1px 8px; border-radius:10px;
-         background:var(--bg); border:1px solid var(--line); color:var(--dim); margin-right:6px; }
-.badge.fact { color:var(--fact); border-color:var(--fact); }
-.badge.infer { color:var(--warn); border-color:var(--warn); }
-.badge.missed { color:var(--bad); border-color:var(--bad); }
-.badge.ok { color:var(--ok); border-color:var(--ok); }
-details { border:1px solid var(--line); border-radius:8px; margin:8px 0; }
+body { font:14px/1.6 ui-monospace,"SF Mono","JetBrains Mono",Menlo,monospace;
+       color:var(--text); margin:0; background:var(--bg);
+       -webkit-font-smoothing:antialiased; }
+header { background:var(--surface); border-bottom:1px solid var(--line);
+         padding:16px 24px 14px; }
+h1 { margin:0 0 8px; font-size:15px; font-weight:600; letter-spacing:0.08em;
+     text-transform:lowercase; color:var(--dim); }
+h2 { font-size:12px; text-transform:lowercase; letter-spacing:0.1em;
+     color:var(--dim); margin:28px 0 12px; font-weight:600; }
+.meta { color:var(--dim); font-size:12.5px; }
+main { max-width:1080px; margin:0 auto; padding:24px; }
+.badge { display:inline-block; font-size:11.5px; line-height:1.7; padding:1px 8px;
+         border-radius:999px; border:1px solid var(--line); color:var(--dim);
+         margin-right:6px; white-space:nowrap; }
+.badge.fact { color:var(--fact); border-color:rgba(88,166,255,0.4); }
+.badge.infer { color:var(--warn); border-color:rgba(245,165,36,0.4); }
+.badge.missed { color:var(--bad); border-color:rgba(244,80,76,0.4); }
+.badge.ok { color:var(--ok); border-color:rgba(61,220,132,0.4); }
+details { background:var(--surface); border:1px solid var(--line);
+          border-radius:10px; margin:8px 0; }
 summary { cursor:pointer; padding:10px 14px; font-weight:600; }
-details[open] summary { border-bottom:1px solid var(--line); }
+details[open] > summary { border-bottom:1px solid var(--line); }
 .body { padding:12px 14px; }
-pre { background:var(--bg); border:1px solid var(--line); border-radius:6px;
-      padding:10px 12px; overflow-x:auto; font-size:12.5px; line-height:1.5; white-space:pre-wrap; }
-blockquote { margin:8px 0; padding:6px 12px; border-left:3px solid var(--fact);
-             background:var(--bg); }
-table { border-collapse:collapse; width:100%; font-size:13.5px; }
-td,th { border:1px solid var(--line); padding:5px 10px; text-align:left; vertical-align:top; }
-th { background:var(--bg); }
-.notice { padding:10px 14px; border-radius:8px; background:#fdf3e7;
-          border:1px solid var(--warn); color:var(--warn); }
-.timeline-item { display:flex; gap:12px; padding:8px 0; border-bottom:1px dashed var(--line); }
-.timeline-ts { color:var(--dim); font-size:12.5px; white-space:nowrap; width:150px; }
+pre { background:var(--bg); border:1px solid var(--line); border-radius:8px;
+      padding:10px 12px; overflow-x:auto; font-size:12px; line-height:1.55;
+      white-space:pre-wrap; word-break:break-all; }
+blockquote { margin:6px 0; padding:4px 12px; border-left:2px solid var(--fact);
+             color:var(--dim); font-size:12.5px; }
+table { border-collapse:collapse; width:100%; font-size:12.5px; }
+td,th { border-bottom:1px solid var(--line); padding:6px 10px; text-align:left;
+        vertical-align:top; }
+th { color:var(--dim); font-weight:500; font-size:11.5px; }
+tr:last-child td { border-bottom:none; }
+.notice { padding:10px 14px; border-radius:8px; background:rgba(245,165,36,0.06);
+          border:1px solid rgba(245,165,36,0.4); color:var(--warn); }
 .empty { color:var(--dim); font-style:italic; }
+.sources summary { font-weight:400; color:var(--dim); font-size:12.5px; }
+.sources ul { margin:8px 0; padding:2px 14px 10px; list-style:none;
+              max-height:280px; overflow-y:auto; }
+.sources li { padding:2px 0; font-size:12px; color:var(--dim);
+              word-break:break-all; }
 """
 
 MAX_DEPTH = 12
@@ -211,8 +223,12 @@ def render_skill_tree(document: AuditDocument) -> str:
         "<body>",
         "<header>",
         "<h1>Actual Skill Tree</h1>",
-        "<div class='meta'>%s</div>" % " · ".join(
-            esc(source) for source in document.source_files),
+        "<details class='sources'><summary>%d source transcript%s</summary>"
+        "<ul>%s</ul></details>" % (
+            len(document.source_files),
+            "" if len(document.source_files) == 1 else "s",
+            "".join("<li>%s</li>" % esc(source)
+                    for source in document.source_files)),
         "<div class='meta'>"
         "<span class='badge'>IR %s</span>"
         "<span class='badge'>%d agents</span>"
