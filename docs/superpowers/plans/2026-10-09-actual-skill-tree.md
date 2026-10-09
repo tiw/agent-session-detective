@@ -312,6 +312,7 @@ def merge_skill_identities(
     mutated and item ids are never re-keyed.
     """
     absorbed_by_target: Dict[str, List[SkillEntity]] = {}
+    absorbed_ids: Set[str] = set()
     ambiguous: List[str] = []
     for entity in entities:
         bare = entity.skill_id
@@ -325,9 +326,12 @@ def merge_skill_identities(
         if candidates:
             absorbed_by_target.setdefault(
                 candidates[0].skill_id, []).append(entity)
+            absorbed_ids.add(bare)
     merged_entities: List[SkillEntity] = []
     aliases: Dict[str, List[str]] = {}
     for entity in entities:
+        if entity.skill_id in absorbed_ids:
+            continue
         absorbed = absorbed_by_target.get(entity.skill_id)
         if not absorbed:
             merged_entities.append(entity)
