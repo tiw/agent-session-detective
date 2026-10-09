@@ -1,6 +1,7 @@
 import json
 import os
 import shutil
+import sqlite3
 import tempfile
 import unittest
 import urllib.error
@@ -210,6 +211,59 @@ class TreeRouteTests(unittest.TestCase):
                 self.assertIn("text/html", response.headers["Content-Type"])
 
             self.assertIn("no usage telemetry", page)
+
+    def test_billed_param_renders_billed_totals_from_the_side_channel(self):
+        from agent_session_detective import billing
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            transcript = base / "3b241101-e2bb-4255-8caf-4136c566a962.jsonl"
+            shutil.copy(FIXTURES / "ir" / "tier1.jsonl", transcript)
+            db = base / "local.db"
+            conn = sqlite3.connect(db)
+            conn.execute(
+                "CREATE TABLE chat_message (session_id TEXT, token_info TEXT)")
+            conn.execute("INSERT INTO chat_message VALUES (?, ?)", (
+                "3b241101-e2bb-4255-8caf-4136c566a962",
+                json.dumps({"prompt_tokens": 1000, "completion_tokens": 40,
+                            "cached_tokens": 800})))
+            conn.commit()
+            conn.close()
+            original = billing.DEFAULT_DB_PATH
+            billing.DEFAULT_DB_PATH = db
+            self.addCleanup(setattr, billing, "DEFAULT_DB_PATH", original)
+
+            with urllib.request.urlopen(
+                    self.tree_url(str(transcript)) + "&billed=1") as response:
+                page = response.read().decode("utf-8")
+
+            self.assertIn("billed (provider): 1 requests", page)
+            self.assertIn("prompt 1000", page)
+
+    def test_billed_param_with_unavailable_side_channel_renders_the_note(self):
+        from agent_session_detective import billing
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            transcript = base / "3b241101-e2bb-4255-8caf-4136c566a962.jsonl"
+            shutil.copy(FIXTURES / "ir" / "tier1.jsonl", transcript)
+            original = billing.DEFAULT_DB_PATH
+            billing.DEFAULT_DB_PATH = base / "absent.db"
+            self.addCleanup(setattr, billing, "DEFAULT_DB_PATH", original)
+
+            with urllib.request.urlopen(
+                    self.tree_url(str(transcript)) + "&billed=1") as response:
+                page = response.read().decode("utf-8")
+
+            self.assertIn("billed_usage: unavailable", page)
+
+    def test_no_billed_param_renders_no_billed_block(self):
+        with tempfile.TemporaryDirectory() as directory:
+            transcript = Path(directory) / "tier1.jsonl"
+            shutil.copy(FIXTURES / "ir" / "tier1.jsonl", transcript)
+
+            with urllib.request.urlopen(self.tree_url(str(transcript))) as response:
+                page = response.read().decode("utf-8")
+
+            self.assertNotIn("billed (provider)", page)
 
 
 if __name__ == "__main__":

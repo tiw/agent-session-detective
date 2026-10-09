@@ -545,12 +545,13 @@ def _ir_adapter_id(session, source_path) -> str:
     return "unknown"
 
 
-def render_tree_page(session_path: str) -> str:
+def render_tree_page(session_path: str, billed: bool = False) -> str:
     """The actual skill tree for one session, as a standalone HTML page.
 
     Same IR projection the audit job uses, minus judge and catalog: the
     tree derives from the document alone, so no audit cache and no
-    background job are involved.
+    background job are involved. ``billed=True`` opt-in attaches the
+    provider-billed side-channel before rendering (no db-path over HTTP).
     """
     from .ir.builder import build_audit_document
     from .tree_html import render_skill_tree
@@ -559,7 +560,11 @@ def render_tree_page(session_path: str) -> str:
     session = load_session(source_path)
     if not session.events:
         raise ValueError("no events parsed")
-    return render_skill_tree(build_audit_document(session, _ir_adapter_id(session, source_path)))
+    document = build_audit_document(session, _ir_adapter_id(session, source_path))
+    if billed:
+        from .billing import attach_billed_usage
+        attach_billed_usage(document, source_path)
+    return render_skill_tree(document)
 
 
 def run_audit(job: Job) -> None:
@@ -742,7 +747,8 @@ class Handler(BaseHTTPRequestHandler):
             )
             self._send_json(200, {"playbooks": playbooks})
         elif route == "/api/tree":
-            path = (parse_qs(parsed.query).get("path") or [""])[0]
+            params = parse_qs(parsed.query)
+            path = (params.get("path") or [""])[0]
             if not path:
                 self._send_json(400, {"error": "path required"})
                 return
@@ -750,7 +756,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(404, {"error": "session not found"})
                 return
             try:
-                page = render_tree_page(path)
+                page = render_tree_page(
+                    path, billed=(params.get("billed") == ["1"]))
             except Exception as exc:
                 self._send_json(500, {"error": str(exc)})
                 return
