@@ -206,7 +206,9 @@ New module; `build_analyses(document)` gains a 6th key `"skill_tree"`.
 id; `hash8` is the first 8 hex chars of the transcript-derived hash in
 the agent id. Parent link: the edge whose `to_agent_id` matches;
 `via_dispatch_id` records it. A node with no incoming edge and not
-`main` goes to `loose` (counted, rendered under a "loose agents" note),
+`main` goes to `loose` (counted, then rendered in full in a closing
+"agents without a dispatch edge" section — loose agents are unreachable
+from `main`'s subtree, so rendering them there cannot double-render),
 never dropped.
 
 **Attachments** — for each node, skills with ≥1 non-listing observation
@@ -266,7 +268,8 @@ Layout, top to bottom:
    Edges render as the child block itself, with the dispatch line
    above it: brief EST, subagent_type, description when present; orphan
    dispatches render as a `warn` note under the parent; `loose` agents
-   render in a closing section with their reason.
+   render in a closing section with their reason followed by the same
+   node block (attachments, dispatches, orphan notices).
 3. **Coverage strip** — footer with honesty labels, all from coverage:
    loads/reloads/unavailable, redundant bodies, `joined_via_meta_only`
    note, phase tier counts with the explicit "phase rules uncalibrated
