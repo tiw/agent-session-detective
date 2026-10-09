@@ -255,9 +255,9 @@ internals: same CSS variable palette (`--ink/--dim/--line/--fact/
 Layout, top to bottom:
 
 1. **Header** — session title line, `IR_VERSION`, agent count, edge
-   count; a one-line legend: chips `load` / `reload` / `executed`,
-   costs are EST (`~`), and `unavailable` means no body was found —
-   never a number.
+   count; a one-line honesty note: costs are EST (`~`) and
+   `unavailable` means no body was found — never a number. Kind and
+   `executed` chips appear at their point of use in the tree.
 2. **Tree** — `main` (or roots when no `main` node) rendered as nested
    `<details open>` blocks; connector lines via CSS borders on the
    indent column; each node header shows label, model, requests,
@@ -274,7 +274,7 @@ Layout, top to bottom:
    loads/reloads/unavailable, redundant bodies, `joined_via_meta_only`
    note, phase tier counts with the explicit "phase rules uncalibrated
    (rule set empty)" line when `rule_set_version` is null, identity
-   merges with aliases, snapshot note that costs are EST.
+   merges with aliases.
 
 Honesty rules enforced by the renderer and tested:
 
