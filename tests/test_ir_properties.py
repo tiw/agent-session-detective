@@ -2,6 +2,8 @@
 the spec formula rather than from the builder's own helper. A registry guard
 keeps the fixture list and the fixture directory in lockstep."""
 
+import json
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -191,47 +193,111 @@ class EvidencePropertiesTest(unittest.TestCase):
     ``assert_adapter_contract`` — D3's re-bucketed briefs live inside that
     same bucket sum."""
 
+    def _assert_load_row_invariants(self, name, document):
+        items_by_id = {item.item_id: item for item in document.items}
+        skills_by_id = {skill.skill_id: skill for skill in document.skills}
+        agent_ids = {agent.agent_id for agent in document.agents}
+        for row in document.skill_loads:
+            self.assertIn(row.agent_id, agent_ids, name)
+            # biconditional: a cost exists exactly when a body was joined
+            self.assertEqual(
+                row.cost_tokens_est is None,
+                row.cost_basis == "unavailable",
+                name,
+            )
+            if row.body_item_id is None:
+                self.assertIsNone(row.cost_tokens_est, name)
+                self.assertIsNone(row.body_sha1, name)
+            else:
+                body = items_by_id[row.body_item_id]
+                expected_kind = (
+                    "tool_result" if row.channel == "tool:read"
+                    else "skill_body"
+                )
+                self.assertEqual(body.kind, expected_kind, name)
+                if body.skill_id != row.skill_id:
+                    self.assertIn(
+                        body.skill_id,
+                        skills_by_id[row.skill_id].aliases,
+                        name,
+                    )
+                self.assertEqual(
+                    row.cost_tokens_est, body.tokens_est, name
+                )
+                self.assertEqual(row.body_sha1, body.sha1, name)
+            if row.marker_item_id is not None:
+                marker = items_by_id[row.marker_item_id]
+                self.assertEqual(marker.kind, "skill_stub", name)
+                if marker.skill_id != row.skill_id:
+                    self.assertIn(
+                        marker.skill_id,
+                        skills_by_id[row.skill_id].aliases,
+                        name,
+                    )
+            # a stub estimate is never promoted into a load cost: the
+            # only cost source is the joined body item above
+            self.assertIn(row.cost_basis, ("body", "unavailable"), name)
+
     def test_load_rows_resolve_and_costs_come_only_from_body_items(self):
         for name in ALL_FIXTURES:
-            document = build(name)
-            items_by_id = {item.item_id: item for item in document.items}
-            skills_by_id = {skill.skill_id: skill for skill in document.skills}
-            agent_ids = {agent.agent_id for agent in document.agents}
-            for row in document.skill_loads:
-                self.assertIn(row.agent_id, agent_ids, name)
-                # biconditional: a cost exists exactly when a body was joined
-                self.assertEqual(
-                    row.cost_tokens_est is None,
-                    row.cost_basis == "unavailable",
-                    name,
-                )
-                if row.body_item_id is None:
-                    self.assertIsNone(row.cost_tokens_est, name)
-                    self.assertIsNone(row.body_sha1, name)
-                else:
-                    body = items_by_id[row.body_item_id]
-                    expected_kind = (
-                        "tool_result" if row.channel == "tool:read"
-                        else "skill_body"
-                    )
-                    self.assertEqual(body.kind, expected_kind, name)
-                    if body.skill_id != row.skill_id:
-                        self.assertIn(
-                            body.skill_id,
-                            skills_by_id[row.skill_id].aliases,
-                            name,
-                        )
-                    self.assertEqual(
-                        row.cost_tokens_est, body.tokens_est, name
-                    )
-                    self.assertEqual(row.body_sha1, body.sha1, name)
-                if row.marker_item_id is not None:
-                    marker = items_by_id[row.marker_item_id]
-                    self.assertEqual(marker.kind, "skill_stub", name)
-                    self.assertEqual(row.skill_id, marker.skill_id, name)
-                # a stub estimate is never promoted into a load cost: the
-                # only cost source is the joined body item above
-                self.assertIn(row.cost_basis, ("body", "unavailable"), name)
+            self._assert_load_row_invariants(name, build(name))
+
+    def test_merged_bare_stub_rows_keep_marker_join_alias_aware(self):
+        # No checked-in fixture exercises a merged bare stub: in
+        # skill-identity.jsonl the absorbed observation is the read body.
+        # This synthetic transcript locks the shape where the *marker* item
+        # keeps the bare wire id (skill_stub "demo") while the row is keyed
+        # by the canonical merged id ("ns:demo").
+        records = [
+            {"type": "user", "uuid": "u1", "parentUuid": None,
+             "isSidechain": False, "timestamp": "2026-10-08T12:00:00.000Z",
+             "message": {"content": [{"type": "text", "text": "audit"}]}},
+            {"type": "assistant", "uuid": "u2", "parentUuid": "u1",
+             "isSidechain": False, "timestamp": "2026-10-08T12:00:01.000Z",
+             "message": {
+                 "model": "qoder-pro",
+                 "content": [{"type": "tool_use", "id": "t1",
+                              "name": "Skill",
+                              "input": {"skill": "ns:demo"}}],
+                 "usage": {"input_tokens": 1000, "output_tokens": 10}}},
+            {"type": "user", "uuid": "u3", "parentUuid": "u2",
+             "isSidechain": False, "timestamp": "2026-10-08T12:00:02.000Z",
+             "message": {"content": [
+                 {"type": "tool_result", "tool_use_id": "t1",
+                  "content": "Launching skill: ns:demo"}]}},
+            {"type": "assistant", "uuid": "u4", "parentUuid": "u3",
+             "isSidechain": False, "timestamp": "2026-10-08T12:00:03.000Z",
+             "message": {
+                 "model": "qoder-pro",
+                 "content": [{"type": "tool_use", "id": "t2",
+                              "name": "Skill",
+                              "input": {"skill": "demo"}}],
+                 "usage": {"input_tokens": 1100, "output_tokens": 10}}},
+            {"type": "user", "uuid": "u5", "parentUuid": "u4",
+             "isSidechain": False, "timestamp": "2026-10-08T12:00:04.000Z",
+             "message": {"content": [
+                 {"type": "tool_result", "tool_use_id": "t2",
+                  "content": "Launching skill: demo"}]}},
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            transcript = Path(directory) / "transcript.jsonl"
+            transcript.write_text(
+                "".join(json.dumps(record) + "\n" for record in records),
+                encoding="utf-8",
+            )
+            document = build_audit_document(load_session(transcript), "qoder")
+
+        items_by_id = {item.item_id: item for item in document.items}
+        skills_by_id = {skill.skill_id: skill for skill in document.skills}
+        aliased_markers = [
+            row for row in document.skill_loads
+            if row.marker_item_id is not None
+            and items_by_id[row.marker_item_id].skill_id != row.skill_id
+            and items_by_id[row.marker_item_id].skill_id
+            in skills_by_id[row.skill_id].aliases
+        ]
+        self.assertGreater(len(aliased_markers), 0)
+        self._assert_load_row_invariants("merged-bare-stub", document)
 
     def test_skill_load_evidence_counters_equal_an_independent_recount(self):
         for name in ALL_FIXTURES:

@@ -83,7 +83,9 @@ def fingerprint(session_path: str, judge_model: str) -> str:
     # no longer inflate compaction_count or mark turns compaction-crossed).
     # v6 adds the IR 1.1 evidence-backed skill_loads block and drops the
     # lifecycle cost claim — v5 cached results would render without it.
-    return "%.3f:%d:%s:v6" % (newest, total, judge_model)
+    # v7 canonicalizes merged skill ids in the skill_loads ledger (IR 1.2),
+    # so v6 cached results would carry pre-merge rows.
+    return "%.3f:%d:%s:v7" % (newest, total, judge_model)
 
 
 def cache_load(key: str, fp: str) -> Optional[dict]:
