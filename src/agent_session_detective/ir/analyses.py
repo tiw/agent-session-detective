@@ -16,6 +16,8 @@
   that by design have no ledger row).
 - ``dispatches``: the IR 1.1 dispatch join rows, phase entities, and the
   coverage link/phase-recognition blocks.
+- ``skill_tree``: the actual skill tree — agents as nodes, dispatch rows
+  as edges, per-agent attachments and ambient listing cost.
 
 The v1 FIFO simplification is retired (IR 1.1 carries ``tool_use_id``):
 ``tool_result_without_call`` / ``tool_call_without_result`` flags are
@@ -30,6 +32,7 @@ from dataclasses import asdict
 from typing import Dict, List, Set, Tuple
 
 from .schema import AuditDocument
+from .skill_tree import skill_tree
 
 RE_INJECTION_BUCKETS = ("inject", "skill")
 
@@ -308,4 +311,5 @@ def build_analyses(document: AuditDocument) -> dict:
         "redundancy": redundancy(document),
         "skill_loads": skill_loads(document),
         "dispatches": dispatches(document),
+        "skill_tree": skill_tree(document),
     }

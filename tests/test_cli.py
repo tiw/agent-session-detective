@@ -178,7 +178,7 @@ class IrCliTests(unittest.TestCase):
             self.assertEqual(
                 sorted(analyses),
                 ["context_organization", "dispatches", "redundancy",
-                 "skill_audit", "skill_loads"],
+                 "skill_audit", "skill_loads", "skill_tree"],
             )
             self.assertEqual(
                 [row["call_id"] for row in analyses["context_organization"]["rows"]],
@@ -198,7 +198,7 @@ class IrCliTests(unittest.TestCase):
             self.assertEqual(
                 sorted(analyses),
                 ["context_organization", "dispatches", "redundancy",
-                 "skill_audit", "skill_loads"],
+                 "skill_audit", "skill_loads", "skill_tree"],
             )
             self.assertEqual(
                 [row["call_id"] for row in analyses["context_organization"]["rows"]],
