@@ -9,6 +9,7 @@
   var progress = document.getElementById("progress");
   var stepsBox = document.getElementById("steps");
   var report = document.getElementById("report");
+  var treeLink = document.getElementById("tree-link");
 
   var currentSession = null;
   var pollTimer = null;
@@ -219,6 +220,8 @@
     report.innerHTML = "";
     progress.hidden = true;
     auditTitle.textContent = session.workspace.replace(/^wd_/, "") + " · " + session.id.slice(0, 8);
+    treeLink.hidden = false;
+    treeLink.href = "/api/tree?path=" + encodeURIComponent(session.path);
     setStatus("ready. " + session.path);
     loadPlaybooks();
   }

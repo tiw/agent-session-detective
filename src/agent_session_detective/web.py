@@ -525,6 +525,23 @@ def _ir_adapter_id(session, source_path) -> str:
     return "unknown"
 
 
+def render_tree_page(session_path: str) -> str:
+    """The actual skill tree for one session, as a standalone HTML page.
+
+    Same IR projection the audit job uses, minus judge and catalog: the
+    tree derives from the document alone, so no audit cache and no
+    background job are involved.
+    """
+    from .ir.builder import build_audit_document
+    from .tree_html import render_skill_tree
+
+    source_path = Path(session_path).expanduser()
+    session = load_session(source_path)
+    if not session.events:
+        raise ValueError("no events parsed")
+    return render_skill_tree(build_audit_document(session, _ir_adapter_id(session, source_path)))
+
+
 def run_audit(job: Job) -> None:
     job.status = "running"
     job.started_at = time.time()
@@ -657,6 +674,14 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _send_html(self, page: str) -> None:
+        body = page.encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def _send_file(self, path: Path) -> None:
         if not path.exists() or not path.is_file():
             self._send_json(404, {"error": "not found"})
@@ -696,6 +721,20 @@ class Handler(BaseHTTPRequestHandler):
                 str(p) for p in Path("~/.agents/skills").expanduser().glob("*/playbooks/*.md")
             )
             self._send_json(200, {"playbooks": playbooks})
+        elif route == "/api/tree":
+            path = (parse_qs(parsed.query).get("path") or [""])[0]
+            if not path:
+                self._send_json(400, {"error": "path required"})
+                return
+            if not Path(path).expanduser().exists():
+                self._send_json(404, {"error": "session not found"})
+                return
+            try:
+                page = render_tree_page(path)
+            except Exception as exc:
+                self._send_json(500, {"error": str(exc)})
+                return
+            self._send_html(page)
         else:
             self._send_json(404, {"error": "not found"})
 

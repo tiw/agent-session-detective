@@ -1,10 +1,17 @@
 import os
+import shutil
 import tempfile
 import unittest
+import urllib.error
+import urllib.parse
+import urllib.request
+from http.server import ThreadingHTTPServer
 from pathlib import Path
 
 import agent_session_detective.web as web
 from agent_session_detective.web import cache_load, cache_store, discover_sessions, fingerprint
+
+FIXTURES = Path(__file__).parent / "fixtures"
 
 
 class QoderWebTests(unittest.TestCase):
@@ -114,6 +121,63 @@ class SessionDiscoveryScopeTests(unittest.TestCase):
             sessions = discover_sessions([str(base)])
 
             self.assertEqual([s["path"] for s in sessions], [str(rollout)])
+
+
+class TreeRouteTests(unittest.TestCase):
+    """GET /api/tree serves the actual skill tree (IR 1.2 renderer) for one
+    session path as a standalone HTML page. No judge and no audit cache: the
+    tree derives from the IR document alone."""
+
+    @classmethod
+    def setUpClass(cls):
+        import threading
+
+        cls.server = ThreadingHTTPServer(("127.0.0.1", 0), web.Handler)
+        cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
+        cls.thread.start()
+        cls.base = "http://127.0.0.1:%d" % cls.server.server_address[1]
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server.shutdown()
+        cls.server.server_close()
+
+    def tree_url(self, session_path: str) -> str:
+        return self.base + "/api/tree?path=" + urllib.parse.quote(session_path)
+
+    def test_serves_the_rendered_skill_tree_page(self):
+        with tempfile.TemporaryDirectory() as directory:
+            transcript = Path(directory) / "tier1.jsonl"
+            shutil.copy(FIXTURES / "ir" / "tier1.jsonl", transcript)
+
+            with urllib.request.urlopen(self.tree_url(str(transcript))) as response:
+                page = response.read().decode("utf-8")
+                self.assertEqual(response.status, 200)
+                self.assertIn("text/html", response.headers["Content-Type"])
+
+            self.assertIn("Actual Skill Tree", page)
+            self.assertNotIn("<script", page)
+
+    def test_requires_a_path(self):
+        with self.assertRaises(urllib.error.HTTPError) as ctx:
+            urllib.request.urlopen(self.base + "/api/tree")
+        self.assertEqual(ctx.exception.code, 400)
+
+    def test_unknown_session_is_404(self):
+        with self.assertRaises(urllib.error.HTTPError) as ctx:
+            urllib.request.urlopen(self.tree_url("/no/such/session.jsonl"))
+        self.assertEqual(ctx.exception.code, 404)
+
+    def test_unparseable_session_is_500_with_error(self):
+        with tempfile.TemporaryDirectory() as directory:
+            transcript = Path(directory) / "empty.jsonl"
+            transcript.write_text("", encoding="utf-8")
+
+            with self.assertRaises(urllib.error.HTTPError) as ctx:
+                urllib.request.urlopen(self.tree_url(str(transcript)))
+
+        self.assertEqual(ctx.exception.code, 500)
+        self.assertIn("error", ctx.exception.read().decode("utf-8"))
 
 
 if __name__ == "__main__":
