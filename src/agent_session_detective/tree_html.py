@@ -130,7 +130,7 @@ def _render_node(node: dict, nodes_by_id: Dict[str, dict],
             head += " <span class='badge'>%s</span>" % esc(
                 attachment["skill_id"])
         for alias in attachment["aliases"]:
-            head += " <span class='badge miss'>(alias: %s)</span>" % esc(alias)
+            head += " <span class='badge missed'>(alias: %s)</span>" % esc(alias)
         if attachment["executed"]:
             head += " <span class='badge ok'>executed</span>"
         rows = attachment["loads"]
@@ -241,6 +241,10 @@ def render_skill_tree(document: AuditDocument) -> str:
         for entry in tree["loose"]:
             parts.append("<p>%s <span class='badge'>%s</span></p>" % (
                 esc(entry["label"]), esc(entry["reason"])))
+            node = nodes_by_id.get(entry["agent_id"])
+            if node is not None:
+                parts.append(_render_node(node, nodes_by_id, children,
+                                          orphans, set(), 0))
     parts.append(_footer(document))
     parts.append("</main>")
     parts.append("</body>")

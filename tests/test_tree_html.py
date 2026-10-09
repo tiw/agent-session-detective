@@ -68,6 +68,14 @@ class AliasChipTest(unittest.TestCase):
         self.assertIn("(alias: demo)", out)
         self.assertIn("ns:demo", out)
 
+    def test_alias_chip_uses_the_stylesheet_badge_class(self):
+        out = page(
+            agents=[agent(MAIN)],
+            skills=[skill("ns:demo", [observation("body", tokens=37)],
+                          name="demo", aliases=["demo"])],
+            loads=[load("main:load:1", MAIN, "ns:demo", cost=37)])
+        self.assertIn("class='badge missed'>(alias: demo)", out)
+
 
 class StructureTest(unittest.TestCase):
     def test_cycle_guard_renders_the_note_and_terminates(self):
@@ -94,6 +102,69 @@ class EmptyDocumentTest(unittest.TestCase):
     def test_empty_document(self):
         out = page(agents=[])
         self.assertIn("no agents in document", out)
+
+
+class DepthCapTest(unittest.TestCase):
+    def test_chain_longer_than_the_cap_renders_the_depth_notice(self):
+        agents = [agent(MAIN)]
+        dispatches = []
+        previous = MAIN
+        for i in range(14):
+            agent_id = "subagent:agent-%02d-%s" % (i, "ab12cd34" * 2)
+            agents.append(agent(agent_id))
+            dispatches.append(dispatch(
+                "chain:dispatch:%02d" % i, previous, agent_id, "subagent"))
+            previous = agent_id
+        out = page(agents=agents, dispatches=dispatches)
+        self.assertIn("depth limit reached at", out)
+
+
+class NoMainRootsTest(unittest.TestCase):
+    def test_document_without_main_renders_every_agent_as_a_root(self):
+        root_a = "subagent:root-a-11111111"
+        root_b = "subagent:root-b-22222222"
+        out = page(agents=[agent(root_a), agent(root_b)])
+        self.assertIn("<summary>%s" % root_a, out)
+        self.assertIn("<summary>%s" % root_b, out)
+
+
+class LooseSubtreeTest(unittest.TestCase):
+    def test_loose_agent_renders_attachments_and_its_subtree(self):
+        grandchild = "subagent:agent-gc-3333444455556666"
+        out = page(
+            agents=[agent(MAIN), agent(CHILD), agent(grandchild)],
+            skills=[skill("loose:demo", [observation(
+                "body", CHILD, tokens=42, item_id="i1")])],
+            loads=[load("child:load:1", CHILD, "loose:demo", cost=42)],
+            dispatches=[dispatch("child:dispatch:1", CHILD, grandchild,
+                                 "agent-gc")])
+        self.assertIn("no incoming dispatch edge", out)
+        self.assertIn("loose:demo", out)
+        self.assertIn("agent-gc", out)
+
+
+class MissingChildTest(unittest.TestCase):
+    def test_dispatch_target_without_a_transcript_renders_the_gap(self):
+        ghost = "subagent:ghost-99999999"
+        out = page(
+            agents=[agent(MAIN)],
+            dispatches=[dispatch("main:dispatch:1", MAIN, ghost, "subagent")])
+        self.assertIn("has no transcript", out)
+        self.assertIn(ghost, out)
+
+
+class FooterCoverageEscapingTest(unittest.TestCase):
+    def test_identity_fragments_in_the_footer_are_escaped(self):
+        doc = document(agents=[agent(MAIN)])
+        doc.coverage.skill_identity = {
+            "merges": 1,
+            "aliases": {"ns:demo": ["<i>x</i>"]},
+            "ambiguous": [],
+        }
+        out = render_skill_tree(doc)
+        self.assertIn("identity merges", out)
+        self.assertIn("&lt;i&gt;", out)
+        self.assertNotIn("<i>x</i>", out)
 
 
 if __name__ == "__main__":
