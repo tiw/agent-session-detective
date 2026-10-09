@@ -5,6 +5,7 @@ import unittest
 from agent_session_detective import __version__
 from agent_session_detective.ir.schema import (
     BUCKETS,
+    BilledUsage,
     IR_VERSION,
     UNATTRIBUTED,
     AuditDocument,
@@ -119,7 +120,7 @@ def _minimal_document():
 
 class SchemaTest(unittest.TestCase):
     def test_constants(self):
-        self.assertEqual(IR_VERSION, "1.3")
+        self.assertEqual(IR_VERSION, "1.4")
         self.assertEqual(
             BUCKETS,
             ("system", "tools", "user", "inject", "skill", "assistant", "tool"),
@@ -130,7 +131,7 @@ class SchemaTest(unittest.TestCase):
         document = _minimal_document()
         payload = document.to_dict()
         revived = json.loads(json.dumps(payload))
-        self.assertEqual(revived["ir_version"], "1.3")
+        self.assertEqual(revived["ir_version"], "1.4")
         self.assertEqual(revived["adapter"], {"id": "qoder", "version": "1.0"})
         self.assertEqual(revived["requests"][0]["call_id"], "main:0")
         self.assertEqual(revived["items"][0]["bucket"], "user")
@@ -158,6 +159,7 @@ class SchemaTest(unittest.TestCase):
             [
                 "adapter",
                 "agents",
+                "billing",
                 "compactions",
                 "coverage",
                 "dispatches",
@@ -223,3 +225,48 @@ class SchemaTest(unittest.TestCase):
                 "wire_seq",
             ],
         )
+
+
+class BilledUsageTest(unittest.TestCase):
+    def _document(self):
+        return AuditDocument(
+            adapter={"id": "test", "version": "0"},
+            estimator_version="test",
+            source_files=[],
+            agents=[],
+            requests=[],
+            items=[],
+            skills=[],
+            compactions=[],
+            coverage=CoverageReport(
+                per_field={}, requests_with_anchor="", request_identity={},
+                bucket_sources={}, unknown_channels=[], dropped_records={},
+                notes=[]),
+        )
+
+    def _billed(self, **overrides):
+        fields = dict(
+            session_id="3b241101-e2bb-4255-8caf-4136c566a962",
+            source="SharedClientCache chat_message.token_info",
+            db_path="/tmp/local.db",
+            requests=2,
+            prompt_tokens=100,
+            completion_tokens=10,
+            cached_tokens=80,
+            rows_total=3,
+            rows_malformed=1,
+        )
+        fields.update(overrides)
+        return BilledUsage(**fields)
+
+    def test_billing_field_defaults_to_none(self):
+        self.assertIsNone(self._document().billing)
+
+    def test_billing_serializes_before_ir_version(self):
+        document = self._document()
+        document.billing = self._billed()
+        payload = document.to_dict()
+        keys = list(payload.keys())
+        self.assertLess(keys.index("billing"), keys.index("ir_version"))
+        self.assertEqual(payload["billing"]["prompt_tokens"], 100)
+        self.assertEqual(payload["billing"]["rows_malformed"], 1)

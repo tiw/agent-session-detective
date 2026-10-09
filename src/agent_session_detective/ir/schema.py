@@ -12,7 +12,7 @@ from typing import Dict, List, Optional, Tuple
 
 from .. import __version__ as ASD_VERSION
 
-IR_VERSION = "1.3"
+IR_VERSION = "1.4"
 
 BUCKETS: Tuple[str, ...] = (
     "system",
@@ -248,6 +248,27 @@ class PhaseEntity:
 
 
 @dataclass
+class BilledUsage:
+    """Provider-billed token totals (opt-in side-channel, attached post-build).
+
+    Sourced from Qoder's local SharedClientCache DB. EST (per-skill
+    attribution) and billed (session totals) are separate lenses: every
+    number here is a provider-billed fact; when nothing parseable was
+    observed the field stays null and a coverage note explains why.
+    """
+
+    session_id: str        # transcript uuid used for the SharedClientCache join
+    source: str            # provenance, e.g. "SharedClientCache chat_message.token_info"
+    db_path: str           # the DB file actually queried
+    requests: int          # parseable token_info rows
+    prompt_tokens: int
+    completion_tokens: int
+    cached_tokens: int
+    rows_total: int        # all chat_message rows seen for the session
+    rows_malformed: int    # rows skipped (missing/unparseable token_info)
+
+
+@dataclass
 class AuditDocument:
     adapter: Dict[str, str]
     estimator_version: str
@@ -261,6 +282,9 @@ class AuditDocument:
     skill_loads: List[LoadEvidence] = field(default_factory=list)
     dispatches: List[Dispatch] = field(default_factory=list)
     phases: List[PhaseEntity] = field(default_factory=list)
+    # Opt-in side-channel: attached post-build, never produced by the
+    # builder; null = not requested, or unavailable (see coverage.notes).
+    billing: Optional[BilledUsage] = None
     ir_version: str = IR_VERSION
     generator: dict = field(
         default_factory=lambda: {
