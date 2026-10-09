@@ -16,6 +16,7 @@ from .judge import Judge, judge_session
 from .report import render_report
 from .timeline import build_timeline
 from .tokenstats import build_token_stats
+from .tree_html import render_skill_tree
 from .wire import (
     Session,
     find_latest_codex_session,
@@ -55,6 +56,9 @@ def main(argv=None) -> int:
                         help="Write this session's audit IR document as JSON.")
     parser.add_argument("--ir-analyses", default=None, metavar="PATH",
                         help="Write the three IR analyses as JSON (builds the IR in memory).")
+    parser.add_argument("--tree-out", default=None, metavar="PATH",
+                        help="Render the actual skill tree (agents → dispatches → "
+                             "skill loads) as a standalone HTML page.")
     parser.add_argument("--open", action="store_true", help="Open the report in a browser.")
     parser.add_argument("--no-judge", action="store_true", help="Skip LLM trigger judging.")
     parser.add_argument("--expect", default=None,
@@ -118,6 +122,10 @@ def main(argv=None) -> int:
         _write_json(Path(args.ir_out), document.to_dict())
     if args.ir_analyses:
         _write_json(Path(args.ir_analyses), build_analyses(document))
+    if args.tree_out:
+        tree_path = Path(args.tree_out)
+        tree_path.write_text(render_skill_tree(document), encoding="utf-8")
+        print(tree_path)
 
     timeline = build_timeline(session)
     catalog = load_catalog(extra_dirs=args.skills_dir)
