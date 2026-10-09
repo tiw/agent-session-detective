@@ -1,5 +1,3 @@
-import contextlib
-import io
 import json
 import os
 import shutil
@@ -29,7 +27,7 @@ class QoderCliTests(unittest.TestCase):
             self.assertTrue(render.called)
             self.assertEqual(output.read_text(encoding="utf-8"), "<html>report</html>")
 
-    def test_terminal_cli_transcript_is_rejected_with_clear_message(self):
+    def test_terminal_cli_transcript_is_audited_degraded(self):
         records = [
             {"type": "session_meta", "sessionId": "s1", "timestamp": "2026-10-09T03:03:13Z",
              "cwd": "/w", "data": {"meta_type": "slash_command"}},
@@ -40,12 +38,11 @@ class QoderCliTests(unittest.TestCase):
             transcript = Path(directory) / "cli-transcript.jsonl"
             transcript.write_text("\n".join(json.dumps(r) for r in records), encoding="utf-8")
 
-            stderr = io.StringIO()
-            with contextlib.redirect_stderr(stderr):
+            with patch("agent_session_detective.cli.render_report", return_value="<html>report</html>") as render:
                 exit_code = cli.main([str(transcript), "--no-judge"])
 
-            self.assertEqual(exit_code, 1)
-            self.assertIn("terminal CLI", stderr.getvalue())
+            self.assertEqual(exit_code, 0)
+            self.assertTrue(render.called)
 
     def test_audits_explicit_kimi_session_directory(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -117,6 +114,20 @@ class DetectAdapterTests(unittest.TestCase):
         session = self._session("TurnBegin", "ToolResult", refs={0: {"uuid": "u1"}})
         self.assertEqual(
             cli._detect_adapter(session, Path("/tmp/session.jsonl")), "qoder"
+        )
+
+    def test_source_format_marks_the_degraded_cli_session(self):
+        session = self._session("TurnBegin", "ToolResult")
+        session.source_format = "qoder-cli"
+        self.assertEqual(
+            cli._detect_adapter(session, Path("/tmp/session.jsonl")), "qoder-cli"
+        )
+
+    def test_source_format_beats_event_heuristics(self):
+        session = self._session("TurnBegin", "LLMRequest")
+        session.source_format = "qoder-cli"
+        self.assertEqual(
+            cli._detect_adapter(session, Path("/tmp/session.jsonl")), "qoder-cli"
         )
 
     def test_kimi_cli_marker_is_llm_request(self):

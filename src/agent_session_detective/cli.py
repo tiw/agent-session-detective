@@ -204,8 +204,12 @@ def _detect_adapter(session: Session, source: Path) -> str:
     The wire parsers leave distinct fingerprints: only the Qoder parser attaches
     a per-record ``ref``; ``LLMRequest`` events come from the Kimi CLI parser;
     ``TurnTokens``/``SubagentSpawned`` come from the Kimi desktop parser; Codex
-    rollouts are ``rollout-*.jsonl`` files. Anything else stays ``unknown``.
+    rollouts are ``rollout-*.jsonl`` files. A terminal-CLI Qoder transcript is
+    stamped ``source_format`` by load_session and always wins. Anything else
+    stays ``unknown``.
     """
+    if getattr(session, "source_format", None) == "qoder-cli":
+        return "qoder-cli"
     if any(event.ref is not None for event in session.events):
         return "qoder"
     kinds = {event.type for event in session.events}

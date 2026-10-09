@@ -344,6 +344,24 @@ def discover_sessions(roots: Optional[List[str]] = None) -> List[dict]:
                 "workspace": transcript.parent.name,
                 "mtime": mtime,
             }
+        # Qoder terminal CLI transcripts: <root>/<ws>/transcript/<uuid>.jsonl.
+        # They load degraded (no usage telemetry) but belong in the sidebar;
+        # the workspace shown is the real workspace dir above transcript/.
+        for transcript in base.glob("*/transcript/*.jsonl"):
+            try:
+                mtime = transcript.stat().st_mtime
+            except OSError:
+                continue
+            sid = transcript.stem
+            source_key = "qoder-cli:%s" % transcript.resolve()
+            if source_key in found and found[source_key]["mtime"] >= mtime:
+                continue
+            found[source_key] = {
+                "id": sid,
+                "path": str(transcript),
+                "workspace": transcript.parents[1].name,
+                "mtime": mtime,
+            }
         # Codex sessions: <root>/YYYY/MM/DD/rollout-*.jsonl. The rollout-
         # prefix matters: this glob also runs against the qoder projects
         # root, where depth-4 jsonl files exist but are subagent mirrors
@@ -513,6 +531,8 @@ JOBS_LOCK = threading.Lock()
 
 def _ir_adapter_id(session, source_path) -> str:
     """Best-effort adapter id for the IR document (same fingerprints as cli)."""
+    if getattr(session, "source_format", None) == "qoder-cli":
+        return "qoder-cli"
     if any(event.ref is not None for event in session.events):
         return "qoder"
     kinds = {event.type for event in session.events}

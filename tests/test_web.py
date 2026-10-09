@@ -1,3 +1,4 @@
+import json
 import os
 import shutil
 import tempfile
@@ -79,10 +80,10 @@ class QoderWebTests(unittest.TestCase):
 class SessionDiscoveryScopeTests(unittest.TestCase):
     """Which files on disk count as sessions. The qoder projects root holds
     three kinds of jsonl: IDE transcripts at the top level (the auditable
-    rich format), terminal-CLI transcripts under <ws>/transcript/ (no
-    telemetry), and subagent mirrors under <ws>/<session>/subagents/. Only
-    the first kind belongs in the sidebar — the codex discovery glob must
-    not fish the others out of the qoder root."""
+    rich format), terminal-CLI transcripts under <ws>/transcript/ (they load
+    degraded — no telemetry), and subagent mirrors under
+    <ws>/<session>/subagents/. The first two belong in the sidebar; only the
+    subagent mirrors must stay out."""
 
     def test_does_not_discover_qoder_subagent_files_as_codex_sessions(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -98,18 +99,26 @@ class SessionDiscoveryScopeTests(unittest.TestCase):
 
             self.assertEqual([s["path"] for s in sessions], [str(rich)])
 
-    def test_does_not_discover_terminal_cli_transcripts(self):
-        # <ws>/transcript/<uuid>.jsonl carries no usage telemetry; it stays
-        # out of the sidebar until a dedicated adapter exists.
+    def test_discovers_terminal_cli_transcripts(self):
+        # <ws>/transcript/<uuid>.jsonl is the terminal-CLI transcript: it
+        # loads degraded (no usage telemetry), so it belongs in the sidebar;
+        # the workspace shown is the real workspace dir above transcript/.
         with tempfile.TemporaryDirectory() as directory:
             base = Path(directory)
-            cli_transcript = base / "demo-workspace" / "transcript" / "b1d65022-d35d-4a45-b24f-27eb970e6b86.jsonl"
+            cli_transcript = (
+                base / "demo-workspace" / "transcript" /
+                "b1d65022-d35d-4a45-b24f-27eb970e6b86.jsonl")
             cli_transcript.parent.mkdir(parents=True)
             cli_transcript.write_text("{}", encoding="utf-8")
 
             sessions = discover_sessions([str(base)])
 
-            self.assertEqual(sessions, [])
+            self.assertEqual(sessions, [{
+                "id": "b1d65022-d35d-4a45-b24f-27eb970e6b86",
+                "path": str(cli_transcript),
+                "workspace": "demo-workspace",
+                "mtime": cli_transcript.stat().st_mtime,
+            }])
 
     def test_discovers_codex_rollout_sessions_by_name(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -178,6 +187,29 @@ class TreeRouteTests(unittest.TestCase):
 
         self.assertEqual(ctx.exception.code, 500)
         self.assertIn("error", ctx.exception.read().decode("utf-8"))
+
+    def test_degraded_cli_session_renders_with_a_notice(self):
+        # Terminal-CLI transcripts load degraded instead of erroring: the
+        # page renders 200 with an honest banner about the missing usage
+        # telemetry.
+        with tempfile.TemporaryDirectory() as directory:
+            transcript = Path(directory) / "cli-session.jsonl"
+            records = [
+                {"type": "session_meta", "data": {"meta_type": "slash_command"}},
+                {"type": "user", "uuid": "u1",
+                 "timestamp": "2026-10-09T08:00:00.000Z",
+                 "message": {"role": "user",
+                             "content": [{"type": "text", "text": "hi"}]}},
+            ]
+            transcript.write_text(
+                "\n".join(json.dumps(r) for r in records), encoding="utf-8")
+
+            with urllib.request.urlopen(self.tree_url(str(transcript))) as response:
+                page = response.read().decode("utf-8")
+                self.assertEqual(response.status, 200)
+                self.assertIn("text/html", response.headers["Content-Type"])
+
+            self.assertIn("no usage telemetry", page)
 
 
 if __name__ == "__main__":

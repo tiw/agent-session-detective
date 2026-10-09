@@ -51,9 +51,9 @@ def dispatch(dispatch_id, parent, child, subagent_type,
                     phase_id=None)
 
 
-def document(agents, skills=(), loads=(), dispatches=()):
+def document(agents, skills=(), loads=(), dispatches=(), adapter=None):
     return AuditDocument(
-        adapter={"id": "test", "version": "test"},
+        adapter=adapter or {"id": "test", "version": "test"},
         estimator_version="test",
         source_files=["test.jsonl"],
         agents=list(agents),

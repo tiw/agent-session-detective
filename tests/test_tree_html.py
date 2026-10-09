@@ -49,6 +49,18 @@ class UnavailableTest(unittest.TestCase):
         self.assertIn("~37 EST", out)
 
 
+class DegradedNoticeTest(unittest.TestCase):
+    def test_qoder_cli_document_renders_the_degraded_notice(self):
+        out = page(agents=[agent(MAIN)],
+                   adapter={"id": "qoder-cli", "version": "test"})
+        self.assertIn("no usage telemetry", out)
+        self.assertIn("class='notice'", out)
+
+    def test_rich_documents_render_no_degraded_notice(self):
+        out = page(agents=[agent(MAIN)])
+        self.assertNotIn("no usage telemetry", out)
+
+
 class EscapingTest(unittest.TestCase):
     def test_escaping(self):
         out = page(

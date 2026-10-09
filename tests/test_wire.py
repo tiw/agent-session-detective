@@ -934,7 +934,9 @@ class QoderTerminalCliTranscriptTests(unittest.TestCase):
     records with no usage telemetry and no envelope. It and the codex
     rollout format both lead with a session_meta record — codex carries a
     ``payload`` dict, the qoder CLI a ``data`` dict — so detection must
-    tell them apart and load_session must refuse the unauditable one."""
+    tell them apart. The CLI transcript loads degraded: the conversation
+    and tool calls reconstruct, and the session is stamped so token
+    costs stay unavailable."""
 
     CLI_RECORDS = [
         {
@@ -977,12 +979,13 @@ class QoderTerminalCliTranscriptTests(unittest.TestCase):
     def test_codex_rollout_still_detects_as_codex(self):
         self.assertEqual(_detect_format(FIXTURES / "codex-session.jsonl"), "codex")
 
-    def test_load_session_rejects_terminal_cli_transcript(self):
+    def test_load_session_renders_terminal_cli_transcript_degraded(self):
         with tempfile.TemporaryDirectory() as directory:
             source = self._write_cli_transcript(Path(directory))
-            with self.assertRaises(ValueError) as ctx:
-                load_session(source)
-            self.assertIn("terminal CLI", str(ctx.exception))
+            session = load_session(source)
+            self.assertEqual(session.source_format, "qoder-cli")
+            self.assertFalse(session.compaction_telemetry_available)
+            self.assertIn("TurnBegin", [event.type for event in session.events])
 
     def test_detects_old_terminal_cli_transcript_without_session_meta(self):
         # Pre-October CLI transcripts on disk have no session_meta leader:
@@ -1012,7 +1015,7 @@ class QoderTerminalCliTranscriptTests(unittest.TestCase):
             source.write_text("\n".join(json.dumps(r) for r in records), encoding="utf-8")
             self.assertEqual(_detect_format(source), "qoder-cli")
 
-    def test_load_session_rejects_old_terminal_cli_transcript(self):
+    def test_load_session_renders_old_terminal_cli_transcript_degraded(self):
         records = [
             {
                 "type": "assistant",
@@ -1034,8 +1037,10 @@ class QoderTerminalCliTranscriptTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             source = Path(directory) / "old-cli.jsonl"
             source.write_text("\n".join(json.dumps(r) for r in records), encoding="utf-8")
-            with self.assertRaises(ValueError):
-                load_session(source)
+            session = load_session(source)
+            self.assertEqual(session.source_format, "qoder-cli")
+            self.assertFalse(session.compaction_telemetry_available)
+            self.assertIn("ContentPart", [event.type for event in session.events])
 
     def test_rich_ide_transcript_detects_as_qoder(self):
         # Rich IDE user/assistant records carry the parentUuid/origin

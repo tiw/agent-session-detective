@@ -93,6 +93,10 @@ class Session:
     events: List[Event] = field(default_factory=list)
     protocol_version: Optional[str] = None
     compaction_telemetry_available: bool = True
+    # Wire-level format id when detection found a distinct shape ("qoder-cli"
+    # for the terminal-CLI transcript, which loads degraded). None for the
+    # default formats.
+    source_format: Optional[str] = None
     # Qoder only: meta.json sidecar per subagent file, keyed by the subagent
     # origin ("subagent:<stem>"). Malformed or missing files are counted as
     # RecordDropped events, never guessed.
@@ -595,9 +599,9 @@ def _detect_format(path: Path) -> Optional[str]:
     Qoder terminal CLI transcripts (both variants: with a session_meta
     leader carrying a ``data`` dict, and the older envelope-less records
     interleaved with ``progress`` records) are detected as "qoder-cli" so
-    load_session can refuse them — they carry no usage telemetry. Rich IDE
-    records always carry the parentUuid/origin envelope; CLI records never
-    do, so an envelope-less user/assistant record keeps the scan going
+    load_session loads them degraded — they carry no usage telemetry. Rich
+    IDE records always carry the parentUuid/origin envelope; CLI records
+    never do, so an envelope-less user/assistant record keeps the scan going
     until a decisive marker appears.
     """
     try:
@@ -650,10 +654,10 @@ def load_session(directory: Path) -> Session:
     Supports:
     - Kimi session directory (with wire.jsonl or agents/main/wire.jsonl)
     - Qoder transcript file (.jsonl)
+    - Qoder terminal CLI transcript (<workspace>/transcript/<uuid>.jsonl):
+      loads degraded (source_format "qoder-cli", no compaction telemetry)
+      because it carries no usage telemetry.
     - Codex rollout file (.jsonl)
-
-    Raises ValueError for Qoder terminal CLI transcripts, which carry no
-    usage telemetry and therefore cannot be audited.
     """
     directory = Path(directory)
 
@@ -662,12 +666,15 @@ def load_session(directory: Path) -> Session:
         fmt = _detect_format(directory)
         if fmt == "qoder-cli":
             # <workspace>/transcript/<uuid>.jsonl from the Qoder terminal
-            # CLI: no envelope, no usage telemetry, nothing to audit.
-            raise ValueError(
-                "%s is a Qoder terminal CLI transcript. It carries no usage "
-                "telemetry, so it cannot be audited; pass a Qoder IDE session "
-                "transcript from ~/.qoder/projects instead." % directory
-            )
+            # CLI: no envelope, no usage telemetry. The conversation and
+            # tool calls still reconstruct; the session is stamped
+            # degraded so token costs stay honestly unavailable downstream.
+            session = Session(directory=directory.parent,
+                              compaction_telemetry_available=False,
+                              source_format="qoder-cli")
+            session.events.extend(parse_qoder_transcript(directory))
+            session.events.sort(key=lambda e: (e.ts is None, e.ts or 0.0, e.seq))
+            return session
         if fmt == "codex":
             session = Session(directory=directory.parent, compaction_telemetry_available=False)
             session.events.extend(parse_codex_session(directory))

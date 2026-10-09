@@ -235,12 +235,19 @@ def render_skill_tree(document: AuditDocument) -> str:
         "<span class='badge'>%d edges</span>"
         "</div>" % (esc(document.ir_version), totals["agents"],
                     totals["edges"]),
+    ]
+    if document.adapter.get("id") == "qoder-cli":
+        parts.append(
+            "<div class='notice'>degraded source: this transcript carries "
+            "no usage telemetry, so token costs are unavailable — tool "
+            "calls and dispatch edges still reconstruct.</div>")
+    parts.extend([
         "<div class='meta'>costs are EST (estimated from observed body "
         "tokens); unavailable means no body was observed — a stub-derived "
         "number is never shown.</div>",
         "</header>",
         "<main>",
-    ]
+    ])
     if not tree["nodes"]:
         parts.append("<p class='empty'>no agents in document</p>")
     else:
