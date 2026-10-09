@@ -170,5 +170,22 @@ class FooterCoverageEscapingTest(unittest.TestCase):
         self.assertNotIn("<i>x</i>", out)
 
 
+class TagBalanceTest(unittest.TestCase):
+    def test_skill_attachments_leave_no_unclosed_tags(self):
+        # both branches of the attachment conditional (table rows / no
+        # load rows) must emit balanced div and details markup.
+        out = page(
+            agents=[agent(MAIN)],
+            skills=[skill("demo", [observation("body", tokens=40)]),
+                    skill("stub:demo", [observation("stub", ts=1.0)])],
+            loads=[load("main:load:1", MAIN, "demo", cost=40)])
+        self.assertIn("no load rows", out)
+        self.assertIn("<table", out)
+        self.assertGreater(out.count("<div"), 0)
+        self.assertGreater(out.count("<details"), 0)
+        self.assertEqual(out.count("<div"), out.count("</div>"))
+        self.assertEqual(out.count("<details"), out.count("</details>"))
+
+
 if __name__ == "__main__":
     unittest.main()

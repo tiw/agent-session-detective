@@ -155,7 +155,7 @@ def _render_node(node: dict, nodes_by_id: Dict[str, dict],
                 ))
         body.append(
             "<details open><summary>%s</summary><div class='body'>"
-            "<div class='meta'>total %s</div>%s</details>" % (
+            "<div class='meta'>total %s</div>%s</div></details>" % (
                 head, total,
                 ("<table><tr><th>kind</th><th>channel</th><th>ts</th>"
                  "<th>sha1</th><th>cost</th></tr>%s</table>"
