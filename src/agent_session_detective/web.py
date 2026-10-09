@@ -342,8 +342,12 @@ def discover_sessions(roots: Optional[List[str]] = None) -> List[dict]:
                 "workspace": transcript.parent.name,
                 "mtime": mtime,
             }
-        # Codex sessions: <root>/YYYY/MM/DD/rollout-*.jsonl
-        for codex_file in base.glob("*/*/*/*.jsonl"):
+        # Codex sessions: <root>/YYYY/MM/DD/rollout-*.jsonl. The rollout-
+        # prefix matters: this glob also runs against the qoder projects
+        # root, where depth-4 jsonl files exist but are subagent mirrors
+        # inside <ws>/<session>/subagents/ — those must not surface as
+        # codex sessions.
+        for codex_file in base.glob("*/*/*/rollout-*.jsonl"):
             try:
                 mtime = codex_file.stat().st_mtime
             except OSError:

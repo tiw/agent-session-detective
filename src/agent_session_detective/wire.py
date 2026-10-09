@@ -588,9 +588,17 @@ def parse_qoder_transcript(path: Path, origin: str = "main") -> Iterator[Event]:
 # ---------------------------------------------------------------------------
 
 def _detect_format(path: Path) -> Optional[str]:
-    """Detect the format of a session file by reading the first record.
+    """Detect the format of a session file by scanning its records.
 
-    Returns "codex", "qoder", "kimi", or None if undetectable.
+    Returns "codex", "qoder", "qoder-cli", "kimi", or None if undetectable.
+
+    Qoder terminal CLI transcripts (both variants: with a session_meta
+    leader carrying a ``data`` dict, and the older envelope-less records
+    interleaved with ``progress`` records) are detected as "qoder-cli" so
+    load_session can refuse them — they carry no usage telemetry. Rich IDE
+    records always carry the parentUuid/origin envelope; CLI records never
+    do, so an envelope-less user/assistant record keeps the scan going
+    until a decisive marker appears.
     """
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as fh:
@@ -604,18 +612,33 @@ def _detect_format(path: Path) -> Optional[str]:
                     continue
                 if not isinstance(record, dict):
                     continue
+                rtype = record.get("type")
+                # Both codex rollouts and Qoder terminal CLI transcripts can
+                # lead with a session_meta record; codex carries a "payload"
+                # dict, the terminal CLI a "data" dict.
+                if rtype == "session_meta" and isinstance(record.get("data"), dict):
+                    return "qoder-cli"
+                # The terminal CLI interleaves progress records (hook runs);
+                # rich IDE transcripts never contain them.
+                if rtype == "progress":
+                    return "qoder-cli"
                 if _is_codex_record(record):
                     return "codex"
                 if _is_qoder_record(record):
-                    return "qoder"
+                    if "origin" in record or "parentUuid" in record:
+                        return "qoder"
+                    # Envelope-less message record: ambiguous between an old
+                    # CLI transcript and a rare rich record — keep scanning.
+                    continue
                 # Kimi CLI format has a "message" key with "type" inside
                 if "message" in record and isinstance(record.get("message"), dict):
                     return "kimi"
                 # Kimi desktop format has dotted types
-                rtype = record.get("type", "")
                 if "." in rtype:
                     return "kimi"
-                return None
+                # Header records (workspace-directories, runtime-config, ...)
+                # match nothing — keep scanning.
+                continue
     except (OSError, IOError):
         return None
     return None
@@ -628,12 +651,23 @@ def load_session(directory: Path) -> Session:
     - Kimi session directory (with wire.jsonl or agents/main/wire.jsonl)
     - Qoder transcript file (.jsonl)
     - Codex rollout file (.jsonl)
+
+    Raises ValueError for Qoder terminal CLI transcripts, which carry no
+    usage telemetry and therefore cannot be audited.
     """
     directory = Path(directory)
 
     # Single file input: detect format
     if directory.is_file():
         fmt = _detect_format(directory)
+        if fmt == "qoder-cli":
+            # <workspace>/transcript/<uuid>.jsonl from the Qoder terminal
+            # CLI: no envelope, no usage telemetry, nothing to audit.
+            raise ValueError(
+                "%s is a Qoder terminal CLI transcript. It carries no usage "
+                "telemetry, so it cannot be audited; pass a Qoder IDE session "
+                "transcript from ~/.qoder/projects instead." % directory
+            )
         if fmt == "codex":
             session = Session(directory=directory.parent, compaction_telemetry_available=False)
             session.events.extend(parse_codex_session(directory))

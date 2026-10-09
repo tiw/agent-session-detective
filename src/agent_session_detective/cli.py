@@ -101,7 +101,11 @@ def main(argv=None) -> int:
         print("No session found. Pass a session source or check --sessions-root.", file=sys.stderr)
         return 1
 
-    session = load_session(session_source)
+    try:
+        session = load_session(session_source)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
     if not session.events:
         print("No events parsed from %s" % session_source, file=sys.stderr)
         return 1

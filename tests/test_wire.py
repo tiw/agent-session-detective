@@ -11,7 +11,7 @@ from agent_session_detective.report import render_report
 from agent_session_detective.timeline import build_timeline, estimate_tokens
 from agent_session_detective.tokenstats import BUCKET_KEYS, build_token_stats
 from agent_session_detective.web import timeline_to_dict, tokenstats_to_dict
-from agent_session_detective.wire import find_latest_qoder_transcript, load_session
+from agent_session_detective.wire import _detect_format, find_latest_qoder_transcript, load_session
 
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -926,6 +926,134 @@ class SkillLoadRenderTests(unittest.TestCase):
         self.assertIn('row.cost_basis === "body"', app_js)
         self.assertIn('"~" + row.cost_tokens_est + " (EST)"', app_js)
         self.assertIn("unavailable", app_js)
+
+
+class QoderTerminalCliTranscriptTests(unittest.TestCase):
+    """The Qoder terminal CLI stores a middleweight transcript under
+    <workspace>/transcript/<uuid>.jsonl: session_meta/progress/user/assistant
+    records with no usage telemetry and no envelope. It and the codex
+    rollout format both lead with a session_meta record — codex carries a
+    ``payload`` dict, the qoder CLI a ``data`` dict — so detection must
+    tell them apart and load_session must refuse the unauditable one."""
+
+    CLI_RECORDS = [
+        {
+            "type": "session_meta",
+            "sessionId": "b1d65022-d35d-4a45-b24f-27eb970e6b86",
+            "uuid": "97374e82-4c47-4d60-b51f-b0b32e07d0aa",
+            "timestamp": "2026-10-09T03:03:13.471444Z",
+            "cwd": "/Users/wangting/work/paze-test",
+            "data": {
+                "meta_type": "slash_command",
+                "content": {
+                    "name": "paze-code-workflow",
+                    "type": "skill",
+                    "filePath": "/Users/wangting/.qoder/skills/paze-code-workflow/SKILL.md",
+                },
+            },
+        },
+        {
+            "type": "user",
+            "sessionId": "b1d65022-d35d-4a45-b24f-27eb970e6b86",
+            "uuid": "1f0a2a3b-1c2d-4e5f-8a9b-0c1d2e3f4a5b",
+            "timestamp": "2026-10-09T03:03:20.000Z",
+            "cwd": "/Users/wangting/work/paze-test",
+            "message": {"role": "user", "content": [{"type": "text", "text": "run the workflow"}]},
+        },
+    ]
+
+    def _write_cli_transcript(self, directory: Path) -> Path:
+        source = directory / "b1d65022-d35d-4a45-b24f-27eb970e6b86.jsonl"
+        source.write_text(
+            "\n".join(json.dumps(record) for record in self.CLI_RECORDS), encoding="utf-8"
+        )
+        return source
+
+    def test_detects_qoder_terminal_cli_format(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = self._write_cli_transcript(Path(directory))
+            self.assertEqual(_detect_format(source), "qoder-cli")
+
+    def test_codex_rollout_still_detects_as_codex(self):
+        self.assertEqual(_detect_format(FIXTURES / "codex-session.jsonl"), "codex")
+
+    def test_load_session_rejects_terminal_cli_transcript(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = self._write_cli_transcript(Path(directory))
+            with self.assertRaises(ValueError) as ctx:
+                load_session(source)
+            self.assertIn("terminal CLI", str(ctx.exception))
+
+    def test_detects_old_terminal_cli_transcript_without_session_meta(self):
+        # Pre-October CLI transcripts on disk have no session_meta leader:
+        # they start directly with envelope-less assistant records and
+        # interleave progress records (rich IDE transcripts never contain
+        # progress records).
+        records = [
+            {
+                "type": "assistant",
+                "sessionId": "717bf171-9e3a-416b-9332-dbed1cd8670b",
+                "uuid": "u1",
+                "timestamp": "2026-08-05T07:06:46.258714Z",
+                "cwd": "/w",
+                "message": {"role": "assistant", "content": [{"type": "text", "text": "hi"}]},
+            },
+            {
+                "type": "progress",
+                "sessionId": "717bf171-9e3a-416b-9332-dbed1cd8670b",
+                "uuid": "u2",
+                "timestamp": "2026-08-05T07:06:46.5Z",
+                "cwd": "/w",
+                "data": {"type": "hook_progress", "hookName": "PreToolUse:Read"},
+            },
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "old-cli.jsonl"
+            source.write_text("\n".join(json.dumps(r) for r in records), encoding="utf-8")
+            self.assertEqual(_detect_format(source), "qoder-cli")
+
+    def test_load_session_rejects_old_terminal_cli_transcript(self):
+        records = [
+            {
+                "type": "assistant",
+                "sessionId": "s1",
+                "uuid": "u1",
+                "timestamp": "2026-08-05T07:06:46Z",
+                "cwd": "/w",
+                "message": {"role": "assistant", "content": [{"type": "text", "text": "hi"}]},
+            },
+            {
+                "type": "progress",
+                "sessionId": "s1",
+                "uuid": "u2",
+                "timestamp": "2026-08-05T07:06:46.5Z",
+                "cwd": "/w",
+                "data": {"type": "hook_progress"},
+            },
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "old-cli.jsonl"
+            source.write_text("\n".join(json.dumps(r) for r in records), encoding="utf-8")
+            with self.assertRaises(ValueError):
+                load_session(source)
+
+    def test_rich_ide_transcript_detects_as_qoder(self):
+        # Rich IDE user/assistant records carry the parentUuid/origin
+        # envelope chain; the CLI never writes those fields.
+        records = [
+            {
+                "type": "user",
+                "uuid": "u1",
+                "timestamp": "2026-10-07T08:00:00.000Z",
+                "parentUuid": None,
+                "origin": {"kind": "human"},
+                "message": {"role": "user", "content": [{"type": "text", "text": "hi"}]},
+            },
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "rich.jsonl"
+            source.write_text(json.dumps(records[0]), encoding="utf-8")
+            self.assertEqual(_detect_format(source), "qoder")
 
 
 if __name__ == "__main__":

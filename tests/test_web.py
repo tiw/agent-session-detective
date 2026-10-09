@@ -70,5 +70,52 @@ class QoderWebTests(unittest.TestCase):
             web.CACHE_DIR = original_cache_dir
 
 
+class SessionDiscoveryScopeTests(unittest.TestCase):
+    """Which files on disk count as sessions. The qoder projects root holds
+    three kinds of jsonl: IDE transcripts at the top level (the auditable
+    rich format), terminal-CLI transcripts under <ws>/transcript/ (no
+    telemetry), and subagent mirrors under <ws>/<session>/subagents/. Only
+    the first kind belongs in the sidebar — the codex discovery glob must
+    not fish the others out of the qoder root."""
+
+    def test_does_not_discover_qoder_subagent_files_as_codex_sessions(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            rich = base / "demo-workspace" / "11111111-1111-1111-1111-111111111111.jsonl"
+            rich.parent.mkdir()
+            rich.write_text("{}", encoding="utf-8")
+            subagent = rich.with_suffix("") / "subagents" / "agent-aExplore-abc123.jsonl"
+            subagent.parent.mkdir(parents=True)
+            subagent.write_text("{}", encoding="utf-8")
+
+            sessions = discover_sessions([str(base)])
+
+            self.assertEqual([s["path"] for s in sessions], [str(rich)])
+
+    def test_does_not_discover_terminal_cli_transcripts(self):
+        # <ws>/transcript/<uuid>.jsonl carries no usage telemetry; it stays
+        # out of the sidebar until a dedicated adapter exists.
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            cli_transcript = base / "demo-workspace" / "transcript" / "b1d65022-d35d-4a45-b24f-27eb970e6b86.jsonl"
+            cli_transcript.parent.mkdir(parents=True)
+            cli_transcript.write_text("{}", encoding="utf-8")
+
+            sessions = discover_sessions([str(base)])
+
+            self.assertEqual(sessions, [])
+
+    def test_discovers_codex_rollout_sessions_by_name(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            rollout = base / "2026" / "10" / "09" / "rollout-2026-10-09T03-00-00-abc.jsonl"
+            rollout.parent.mkdir(parents=True)
+            rollout.write_text("{}", encoding="utf-8")
+
+            sessions = discover_sessions([str(base)])
+
+            self.assertEqual([s["path"] for s in sessions], [str(rollout)])
+
+
 if __name__ == "__main__":
     unittest.main()

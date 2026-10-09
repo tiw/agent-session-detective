@@ -1,3 +1,5 @@
+import contextlib
+import io
 import json
 import os
 import shutil
@@ -26,6 +28,24 @@ class QoderCliTests(unittest.TestCase):
             self.assertEqual(exit_code, 0)
             self.assertTrue(render.called)
             self.assertEqual(output.read_text(encoding="utf-8"), "<html>report</html>")
+
+    def test_terminal_cli_transcript_is_rejected_with_clear_message(self):
+        records = [
+            {"type": "session_meta", "sessionId": "s1", "timestamp": "2026-10-09T03:03:13Z",
+             "cwd": "/w", "data": {"meta_type": "slash_command"}},
+            {"type": "user", "sessionId": "s1", "timestamp": "2026-10-09T03:03:20Z",
+             "cwd": "/w", "message": {"role": "user", "content": [{"type": "text", "text": "hi"}]}},
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            transcript = Path(directory) / "cli-transcript.jsonl"
+            transcript.write_text("\n".join(json.dumps(r) for r in records), encoding="utf-8")
+
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr):
+                exit_code = cli.main([str(transcript), "--no-judge"])
+
+            self.assertEqual(exit_code, 1)
+            self.assertIn("terminal CLI", stderr.getvalue())
 
     def test_audits_explicit_kimi_session_directory(self):
         with tempfile.TemporaryDirectory() as directory:
