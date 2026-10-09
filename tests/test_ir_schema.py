@@ -119,7 +119,7 @@ def _minimal_document():
 
 class SchemaTest(unittest.TestCase):
     def test_constants(self):
-        self.assertEqual(IR_VERSION, "1.1")
+        self.assertEqual(IR_VERSION, "1.2")
         self.assertEqual(
             BUCKETS,
             ("system", "tools", "user", "inject", "skill", "assistant", "tool"),
@@ -130,7 +130,7 @@ class SchemaTest(unittest.TestCase):
         document = _minimal_document()
         payload = document.to_dict()
         revived = json.loads(json.dumps(payload))
-        self.assertEqual(revived["ir_version"], "1.1")
+        self.assertEqual(revived["ir_version"], "1.2")
         self.assertEqual(revived["adapter"], {"id": "qoder", "version": "1.0"})
         self.assertEqual(revived["requests"][0]["call_id"], "main:0")
         self.assertEqual(revived["items"][0]["bucket"], "user")

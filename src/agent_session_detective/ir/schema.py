@@ -12,7 +12,7 @@ from typing import Dict, List, Optional, Tuple
 
 from .. import __version__ as ASD_VERSION
 
-IR_VERSION = "1.1"
+IR_VERSION = "1.2"
 
 BUCKETS: Tuple[str, ...] = (
     "system",
@@ -116,6 +116,9 @@ class Observation:
     tokens_est: int
     body_sha1: Optional[str]
     item_id: str
+    # Identity merge (IR 1.2): the id this observation was recorded under
+    # before a bare id merged into its namespaced twin; null = canonical.
+    raw_skill_id: Optional[str] = None
 
 
 @dataclass
@@ -123,6 +126,8 @@ class SkillEntity:
     skill_id: str
     name: str
     observations: List[Observation]
+    # Identity merge (IR 1.2): bare ids absorbed into this entity, sorted.
+    aliases: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -164,6 +169,8 @@ class CoverageReport:
     skill_load_evidence: dict = field(default_factory=dict)
     dispatch_links: dict = field(default_factory=dict)
     phase_recognition: dict = field(default_factory=dict)
+    # IR 1.2: bare-id → namespaced-twin merges, ambiguities counted.
+    skill_identity: dict = field(default_factory=dict)
 
 
 @dataclass
