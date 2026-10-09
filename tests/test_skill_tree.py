@@ -128,6 +128,46 @@ class TreeShapeTest(unittest.TestCase):
         tree = skill_tree(document(agents=[agent(other), agent(CHILD)]))
         self.assertEqual(tree["loose"], [])
 
+    def test_nested_dispatch_chain(self):
+        mid = "subagent:agent-a-aaaa111122223333"
+        leaf = "subagent:agent-b-bbbb444455556666"
+        tree = skill_tree(document(
+            agents=[agent(MAIN), agent(mid), agent(leaf)],
+            dispatches=[
+                dispatch("main:dispatch:1", MAIN, mid, "agent-a"),
+                dispatch("mid:dispatch:1", mid, leaf, "agent-b"),
+            ],
+        ))
+        middle = node_by_id(tree, mid)
+        self.assertEqual(middle["parent_agent_id"], MAIN)
+        self.assertEqual(middle["via_dispatch_id"], "main:dispatch:1")
+        self.assertEqual(middle["label"], "agent-a · aaaa1111")
+        child = node_by_id(tree, leaf)
+        self.assertEqual(child["parent_agent_id"], mid)
+        self.assertEqual(child["via_dispatch_id"], "mid:dispatch:1")
+        self.assertEqual(child["label"], "agent-b · bbbb4444")
+        self.assertEqual(tree["loose"], [])
+        self.assertEqual(tree["totals"]["edges"], 2)
+
+    def test_duplicate_dispatch_first_wins_and_main_is_root(self):
+        tree = skill_tree(document(
+            agents=[agent(MAIN), agent(CHILD)],
+            dispatches=[
+                dispatch("main:dispatch:1", MAIN, CHILD, "pstack:poteto-agent"),
+                dispatch("main:dispatch:2", MAIN, CHILD, "pstack:other-agent"),
+            ],
+        ))
+        self.assertEqual([edge["dispatch_id"] for edge in tree["edges"]],
+                         ["main:dispatch:1", "main:dispatch:2"])
+        self.assertEqual(tree["totals"]["edges"], 2)
+        child = node_by_id(tree, CHILD)
+        self.assertEqual(child["parent_agent_id"], MAIN)
+        self.assertEqual(child["via_dispatch_id"], "main:dispatch:1")
+        self.assertEqual(child["label"], "pstack:poteto-agent · 241caed7")
+        main = node_by_id(tree, MAIN)
+        self.assertIsNone(main["parent_agent_id"])
+        self.assertIsNone(main["via_dispatch_id"])
+
 
 class AttachmentTest(unittest.TestCase):
     def test_attachments_exclude_listing_only_skills(self):
