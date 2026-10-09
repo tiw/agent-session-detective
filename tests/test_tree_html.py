@@ -219,5 +219,50 @@ class SourcesTest(unittest.TestCase):
         self.assertIn("ui-monospace", out)
 
 
+class BilledHeaderTest(unittest.TestCase):
+    UUID = "3b241101-e2bb-4255-8caf-4136c566a962"
+
+    def _billed(self, **overrides):
+        from agent_session_detective.ir.schema import BilledUsage
+        fields = dict(
+            session_id=self.UUID,
+            source="SharedClientCache chat_message.token_info",
+            db_path="/tmp/local.db",
+            requests=120,
+            prompt_tokens=15181929,
+            completion_tokens=120861,
+            cached_tokens=13489152,
+            rows_total=120,
+            rows_malformed=0,
+        )
+        fields.update(overrides)
+        return BilledUsage(**fields)
+
+    def test_billed_block_renders_totals_derived_numbers_and_provenance(self):
+        doc = document(agents=[agent(MAIN)])
+        doc.billing = self._billed()
+        out = render_skill_tree(doc)
+        self.assertIn("billed (provider): 120 requests", out)
+        self.assertIn("prompt 15181929", out)
+        self.assertIn("completion 120861", out)
+        self.assertIn("cached 13489152", out)
+        self.assertIn("non-cached 1692777", out)
+        self.assertIn("cache-hit 88.9%", out)
+        self.assertIn("SharedClientCache chat_message.token_info", out)
+
+    def test_document_without_billing_renders_no_billed_block(self):
+        out = page(agents=[agent(MAIN)])
+        self.assertNotIn("billed (provider)", out)
+
+    def test_unavailable_note_renders_as_a_notice(self):
+        doc = document(agents=[agent(MAIN)])
+        doc.coverage.notes.append(
+            "billed_usage: unavailable (no billed rows for session %s)"
+            % self.UUID)
+        out = render_skill_tree(doc)
+        self.assertIn("class='notice'", out)
+        self.assertIn("billed_usage: unavailable", out)
+
+
 if __name__ == "__main__":
     unittest.main()

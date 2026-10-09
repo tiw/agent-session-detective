@@ -201,6 +201,25 @@ def _render_node(node: dict, nodes_by_id: Dict[str, dict],
             "</details>" % (summary, "".join(body)))
 
 
+def _billed_header_html(document: AuditDocument) -> str:
+    billed = document.billing
+    if billed is not None:
+        non_cached = billed.prompt_tokens - billed.cached_tokens
+        hit = ("%.1f%%" % (billed.cached_tokens * 100.0 / billed.prompt_tokens)
+               if billed.prompt_tokens else "?")
+        return ("<div class='meta'>billed (provider): %d requests / prompt %d / "
+                "completion %d / cached %d / non-cached %d / cache-hit %s · "
+                "rows %d total, %d malformed · source %s · db %s</div>" % (
+                    billed.requests, billed.prompt_tokens,
+                    billed.completion_tokens, billed.cached_tokens, non_cached,
+                    hit, billed.rows_total, billed.rows_malformed,
+                    esc(billed.source), esc(billed.db_path)))
+    for note in document.coverage.notes:
+        if note.startswith("billed_usage: unavailable"):
+            return "<div class='notice'>%s</div>" % esc(note)
+    return ""
+
+
 def render_skill_tree(document: AuditDocument) -> str:
     tree = skill_tree(document)
     nodes_by_id = {node["agent_id"]: node for node in tree["nodes"]}
@@ -245,6 +264,11 @@ def render_skill_tree(document: AuditDocument) -> str:
         "<div class='meta'>costs are EST (estimated from observed body "
         "tokens); unavailable means no body was observed — a stub-derived "
         "number is never shown.</div>",
+    ])
+    billed_html = _billed_header_html(document)
+    if billed_html:
+        parts.append(billed_html)
+    parts.extend([
         "</header>",
         "<main>",
     ])
