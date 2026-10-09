@@ -290,9 +290,12 @@ to the path and prints it, exactly the `--ir-out` pattern
 no other CLI change. `--tree-out` is independent of `--ir-out` /
 `--ir-analyses`; any combination works.
 
-No webapp changes: `web.py` imports the specific `skill_loads` view
+No webapp code changes: `web.py` imports the specific `skill_loads` view
 (`web.py:552`), not `build_analyses`, so the 6th analyses key and the
-new flag are additive; `fingerprint()` stays at v6.
+new flag are additive. The result fingerprint must still bump v6 → v7:
+cached judge results embed the `skill_loads` ledger, whose ids IR 1.2
+canonicalizes — the same class of change as the v5 → v6 bump in
+`1f1c1e4`.
 
 ## Schema delta and versioning
 
