@@ -241,10 +241,9 @@ def render_skill_tree(document: AuditDocument) -> str:
         for entry in tree["loose"]:
             parts.append("<p>%s <span class='badge'>%s</span></p>" % (
                 esc(entry["label"]), esc(entry["reason"])))
-            node = nodes_by_id.get(entry["agent_id"])
-            if node is not None:
-                parts.append(_render_node(node, nodes_by_id, children,
-                                          orphans, set(), 0))
+            parts.append(_render_node(nodes_by_id[entry["agent_id"]],
+                                      nodes_by_id, children, orphans,
+                                      set(), 0))
     parts.append(_footer(document))
     parts.append("</main>")
     parts.append("</body>")
