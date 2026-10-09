@@ -188,6 +188,37 @@ def _hash_runs(events: List[Event]) -> Tuple[List[PromptHashRun], Optional[int]]
     return runs, flips if has_request_hash else None
 
 
+def _billing_turn_contexts(session: Session, turns: List) -> List[Tuple[int, bool]]:
+    """Per-turn context for billing-only logs (Qoder, Codex rollouts).
+
+    A request's full prompt (input + cache read + cache creation) is the
+    context the model saw, so a turn's first usage record measures that
+    turn's starting context (exact). Turns with no usage record carry the
+    last prompt forward (exact=False).
+    """
+    prompts = [
+        (r.ts, r.input_total)
+        for r in _usage_from_events(session.events)
+        if r.origin == "main" and r.ts is not None and r.input_total > 0
+    ]
+    out: List[Tuple[int, bool]] = []
+    for i, t in enumerate(turns):
+        hi = turns[i + 1].ts if i + 1 < len(turns) else None
+        within = [
+            p for p in prompts
+            if t.ts is not None and p[0] >= t.ts and (hi is None or p[0] < hi)
+        ]
+        if within:
+            out.append((within[0][1], True))
+        elif out:
+            out.append((out[-1][0], False))
+        elif prompts:
+            out.append((prompts[0][1], False))
+        else:
+            out.append((0, False))
+    return out
+
+
 def _turn_contexts(session: Session) -> List[Tuple[int, bool]]:
     """Context size at each user turn's start: (tokens, exact).
 
@@ -195,6 +226,8 @@ def _turn_contexts(session: Session) -> List[Tuple[int, bool]]:
     current turn typically has no record yet, so missing turns fall back to
     interpolating the nearest earlier status measurement (exact=False). CLI
     logs only have the status series, so every turn is interpolated.
+    Billing-only logs take the first request's prompt per turn (see
+    :func:`_billing_turn_contexts`).
     """
     turns = [t for t in session.turns() if t.origin == "main"]
     exact: Dict[int, int] = {}
@@ -206,6 +239,8 @@ def _turn_contexts(session: Session) -> List[Tuple[int, bool]]:
         for e in session.events
         if e.type == "StatusUpdate" and e.origin == "main" and e.payload.get("context_tokens")
     ]
+    if not exact and not statuses:
+        return _billing_turn_contexts(session, turns)
 
     def interpolated(t_ts: Optional[float]) -> int:
         before = [s for s in statuses if s[0] is not None and t_ts is not None and s[0] <= t_ts]
@@ -257,14 +292,20 @@ def _has_context_measurement(session: Session) -> bool:
         and (
             (e.type == "StatusUpdate" and e.payload.get("context_tokens") is not None)
             or (e.type == "TurnTokens" and e.payload.get("tokens") is not None)
+            or (e.type == "UsageRecord" and (
+                int(e.payload.get("input_other") or 0)
+                + int(e.payload.get("input_cache_read") or 0)
+                + int(e.payload.get("input_cache_creation") or 0)
+            ) > 0)
         )
         for e in session.events
     )
 
 
 def _turn_growth(session: Session, timeline: Timeline) -> List[TurnGrowth]:
-    # Context growth requires an actual context measurement. Do not turn an
-    # absent series (as in Qoder transcripts) into zero-delta pseudo-data.
+    # Context growth requires an actual context measurement (status series,
+    # per-turn tokens, or per-request billing). Do not turn an absent series
+    # into zero-delta pseudo-data.
     if not _has_context_measurement(session):
         return []
 

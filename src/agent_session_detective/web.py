@@ -77,7 +77,11 @@ def fingerprint(session_path: str, judge_model: str) -> str:
     # RESULT_VERSION bumps whenever the result payload shape changes (e.g.
     # turn items added): old cached results would render with missing data.
     # v3 adds timeline.compaction_count.
-    return "%.3f:%d:%s:v3" % (newest, total, judge_model)
+    # v4 reconstructs per-turn context from billing records, so cached
+    # results for billing-only logs (Qoder/Codex) lack turn_growth.
+    # v5 counts main-agent compactions only (subagent compaction windows
+    # no longer inflate compaction_count or mark turns compaction-crossed).
+    return "%.3f:%d:%s:v5" % (newest, total, judge_model)
 
 
 def cache_load(key: str, fp: str) -> Optional[dict]:

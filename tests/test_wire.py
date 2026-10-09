@@ -478,6 +478,40 @@ class QoderTranscriptTests(unittest.TestCase):
         self.assertTrue(stats.bucket_totals)
         self.assertEqual(timeline_to_dict(timeline)["compaction_count"], 0)
 
+    def test_subagent_compactions_do_not_enter_the_main_timeline(self):
+        main_messages = [
+            {"timestamp": 1, "message": {"type": "CompactionBegin", "payload": {}}},
+            {"timestamp": 2, "message": {"type": "TurnBegin", "payload": {
+                "user_input": [{"type": "text", "text": "first request"}],
+            }}},
+            {"timestamp": 3, "message": {"type": "TurnBegin", "payload": {
+                "user_input": [{"type": "text", "text": "second request"}],
+            }}},
+        ]
+        sub_messages = [
+            {"timestamp": 1.5, "message": {"type": "CompactionBegin", "payload": {}}},
+            {"timestamp": 1.6, "message": {"type": "CompactionEnd", "payload": {}}},
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            session_dir = Path(directory) / "workspace" / "session"
+            sub_dir = session_dir / "subagents" / "agent-x"
+            sub_dir.mkdir(parents=True)
+            (session_dir / "wire.jsonl").write_text(
+                "\n".join(json.dumps(message) for message in main_messages), encoding="utf-8"
+            )
+            (sub_dir / "wire.jsonl").write_text(
+                "\n".join(json.dumps(message) for message in sub_messages), encoding="utf-8"
+            )
+            session = load_session(session_dir)
+
+        timeline = build_timeline(session)
+
+        # A subagent compacts its own context window; the main timeline counts
+        # main-agent compactions only, or compaction_count inflates and
+        # turn_growth wrongly marks turns as compaction-crossed.
+        self.assertEqual(len(timeline.compactions), 1)
+        self.assertEqual(timeline.compactions[0].begin_ts, 1)
+
     def test_bucket_split_separates_skill_inject_and_tool(self):
         inject = "<system-reminder>The user selected these skills: brainstorming.</system-reminder>"
         human = "audit this trace"
@@ -605,6 +639,73 @@ class QoderTranscriptTests(unittest.TestCase):
         self.assertIn("compactions: 0", report)
         self.assertIn("growth: unavailable (no context telemetry)", report)
         self.assertIn("prompt flips: unavailable", report)
+
+    def test_qoder_usage_records_reconstruct_per_turn_context(self):
+        # Billing-only harness: the full prompt of a turn's first request
+        # (input + cache read + cache creation) IS the context at that
+        # turn's start, so per-request usage records reconstruct the series.
+        records = [
+            {"type": "user", "timestamp": "2026-10-07T08:00:00Z",
+             "message": {"content": "first request"}},
+            {"type": "assistant", "timestamp": "2026-10-07T08:00:01Z", "message": {
+                "content": "first reply",
+                "usage": {"input_tokens": 100, "cache_read_input_tokens": 800,
+                          "cache_creation_input_tokens": 100, "output_tokens": 20},
+            }},
+            {"type": "user", "timestamp": "2026-10-07T08:01:00Z",
+             "message": {"content": "second request"}},
+            {"type": "assistant", "timestamp": "2026-10-07T08:01:01Z", "message": {
+                "content": "second reply",
+                "usage": {"input_tokens": 200, "cache_read_input_tokens": 1300,
+                          "cache_creation_input_tokens": 0, "output_tokens": 20},
+            }},
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "transcript.jsonl"
+            source.write_text("\n".join(json.dumps(record) for record in records), encoding="utf-8")
+            session = load_session(source)
+
+        stats = build_token_stats(session, build_timeline(session))
+
+        self.assertEqual(len(stats.turn_growth), 2)
+        self.assertEqual([row.context_at_start for row in stats.turn_growth], [1000, 1500])
+        self.assertEqual([row.exact for row in stats.turn_growth], [True, True])
+        self.assertEqual([row.added for row in stats.turn_growth], [500, None])
+        self.assertNotEqual(stats.growth_verdict, "unavailable (no context telemetry)")
+        self.assertTrue(stats.bucket_totals)
+
+    def test_qoder_turn_without_usage_carries_forward_last_prompt(self):
+        records = [
+            {"type": "user", "timestamp": "2026-10-07T08:00:00Z",
+             "message": {"content": "first request"}},
+            {"type": "assistant", "timestamp": "2026-10-07T08:00:01Z", "message": {
+                "content": "first reply",
+                "usage": {"input_tokens": 400, "cache_read_input_tokens": 600,
+                          "cache_creation_input_tokens": 0, "output_tokens": 20},
+            }},
+            {"type": "user", "timestamp": "2026-10-07T08:01:00Z",
+             "message": {"content": "second request"}},
+            {"type": "assistant", "timestamp": "2026-10-07T08:01:01Z",
+             "message": {"content": "second reply (usage record missing)"}},
+            {"type": "user", "timestamp": "2026-10-07T08:02:00Z",
+             "message": {"content": "third request"}},
+            {"type": "assistant", "timestamp": "2026-10-07T08:02:01Z", "message": {
+                "content": "third reply",
+                "usage": {"input_tokens": 500, "cache_read_input_tokens": 1500,
+                          "cache_creation_input_tokens": 0, "output_tokens": 20},
+            }},
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "transcript.jsonl"
+            source.write_text("\n".join(json.dumps(record) for record in records), encoding="utf-8")
+            session = load_session(source)
+
+        rows = build_token_stats(session, build_timeline(session)).turn_growth
+
+        self.assertEqual(len(rows), 3)
+        self.assertEqual(rows[1].context_at_start, 1000)
+        self.assertFalse(rows[1].exact)
+        self.assertEqual(rows[1].added, 1000)
 
     def test_kimi_request_hashes_with_no_changes_report_zero_flips(self):
         messages = [

@@ -152,11 +152,11 @@ def build_timeline(session: Session) -> Timeline:
             results_by_id[str(event.payload.get("tool_call_id"))] = event
         elif event.type == "StatusUpdate":
             timeline.status_series.append(event)
-        elif event.type == "CompactionBegin":
+        elif event.type == "CompactionBegin" and event.origin == "main":
             timeline.compactions.append(
                 Compaction(index=len(timeline.compactions), begin_ts=event.ts, end_ts=None)
             )
-        elif event.type == "CompactionEnd" and timeline.compactions:
+        elif event.type == "CompactionEnd" and event.origin == "main" and timeline.compactions:
             timeline.compactions[-1].end_ts = event.ts
 
     for call in calls:

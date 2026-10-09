@@ -43,13 +43,13 @@ class QoderWebTests(unittest.TestCase):
                 },
             )
 
-    def test_fingerprint_uses_v3_for_transcript_file_metadata(self):
+    def test_fingerprint_uses_v5_for_transcript_file_metadata(self):
         with tempfile.TemporaryDirectory() as directory:
             transcript = Path(directory) / "transcript.jsonl"
             transcript.write_text("hello", encoding="utf-8")
             os.utime(transcript, (1234, 1234))
 
-            self.assertEqual(fingerprint(str(transcript), "test-model"), "1234.000:5:test-model:v3")
+            self.assertEqual(fingerprint(str(transcript), "test-model"), "1234.000:5:test-model:v5")
 
 
 if __name__ == "__main__":
