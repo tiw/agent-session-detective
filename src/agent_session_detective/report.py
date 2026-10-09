@@ -14,7 +14,7 @@ from typing import List, Optional, TYPE_CHECKING
 from .if_eval import IFResult
 from .judge import Judgment
 from .timeline import Timeline
-from .tokenstats import BUCKET_KEYS, TokenStats
+from .tokenstats import BUCKET_KEYS, TokenStats, TurnGrowth
 from .wire import Session
 
 if TYPE_CHECKING:  # import cycle: report is rendered above the IR in cli.py
@@ -98,12 +98,36 @@ BUCKET_STYLE = {
 }
 
 
-def _growth_chart(stats: TokenStats) -> str:
-    """Stacked per-turn bars: how many tokens each turn added, by bucket."""
-    rows = [
+def _plottable(stats: TokenStats) -> List[TurnGrowth]:
+    """Turns whose measured delta is comparable: not the last turn, not
+    negative, and not crossed by a compaction."""
+    return [
         r for r in stats.turn_growth
         if r.added is not None and r.added >= 0 and not r.crossed_compaction
     ]
+
+
+def _growth_gap_note(stats: TokenStats) -> str:
+    """State why the per-turn growth chart is absent instead of skipping it."""
+    rows = stats.turn_growth
+    if not rows:
+        return ("no per-turn growth chart: this log has no main-agent turn "
+                "with context telemetry")
+    crossed = sum(1 for r in rows if r.crossed_compaction)
+    last = sum(1 for r in rows if r.added is None)
+    shrank = sum(1 for r in rows if r.added is not None and r.added < 0)
+    why = "; ".join(p for p in (
+        "%d crossed a compaction, so the delta is not comparable" % crossed if crossed else "",
+        "%d is the last turn, with no successor to diff against" % last if last else "",
+        "%d shrank (negative delta)" % shrank if shrank else "",
+    ) if p)
+    return ("no per-turn growth chart: 0 of %d main-agent turns plottable — %s"
+            % (len(rows), why or "no attributable context growth"))
+
+
+def _growth_chart(stats: TokenStats) -> str:
+    """Stacked per-turn bars: how many tokens each turn added, by bucket."""
+    rows = _plottable(stats)
     if len(rows) < 2:
         return ""
     width, height = 920, 150
@@ -178,6 +202,13 @@ def _render_token_governance(stats: TokenStats) -> str:
                 "T%d=%d" % (r.turn, r.context_at_start) for r in stats.turn_growth[:30]
             ))
         )
+    elif stats.bucket_shares:
+        # exactly one plottable turn: the bucket table below still renders, but
+        # a single bar cannot show growth
+        out.append("<p class='meta'>no per-turn growth chart: 1 plottable turn, "
+                   "at least 2 are needed to show growth.</p>")
+    else:
+        out.append("<p class='meta'>%s</p>" % esc(_growth_gap_note(stats)))
 
     if stats.bucket_shares:
         out.append("<table><tr><th>bucket</th><th>tokens added</th><th>share</th></tr>")

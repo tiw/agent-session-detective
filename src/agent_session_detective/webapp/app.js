@@ -436,6 +436,29 @@
     box.scrollIntoView({ block: "nearest" });
   });
 
+  function growthGapNote(t) {
+    var rows = t.turn_growth || [];
+    var head = '<p class="dim">每轮 context 增长图与 bucket 占比表未显示：';
+    if (!rows.length) {
+      return head + "该日志没有带 context 遥测的主 agent 轮次。</p>";
+    }
+    var plottable = rows.filter(function (r) {
+      return r.added != null && r.added >= 0 && !r.crossed_compaction;
+    });
+    if (plottable.length) {
+      return head + plottable.length + " 轮可绘，但可归因的 context 增量为 0。</p>";
+    }
+    var crossed = rows.filter(function (r) { return r.crossed_compaction; }).length;
+    var last = rows.filter(function (r) { return r.added == null; }).length;
+    var shrank = rows.filter(function (r) { return r.added != null && r.added < 0; }).length;
+    var why = [];
+    if (crossed) why.push(crossed + " 轮跨压缩（增量不可比，已剔除）");
+    if (last) why.push(last + " 轮为末轮（无后继轮可差分）");
+    if (shrank) why.push(shrank + " 轮 context 收缩（增量为负）");
+    return head + rows.length + " 轮中 0 轮可绘 —— " +
+      (why.join("、") || "无可归因的 context 增长") + "。</p>";
+  }
+
   function renderTokenStats(t) {
     if (!t) return "";
     var parts = [];
@@ -497,6 +520,8 @@
           '<span class="dim">system 为残差推断 · 被压缩跨越的轮次已剔除 · 点击柱子下钻</span></div>');
         parts.push('<div id="turn-detail" hidden></div>');
       }
+    } else {
+      parts.push(growthGapNote(t));
     }
 
     if (t.hash_runs && t.hash_runs.length) {

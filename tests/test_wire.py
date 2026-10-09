@@ -735,6 +735,71 @@ class QoderTranscriptTests(unittest.TestCase):
         self.assertEqual(tokenstats_to_dict(stats)["hash_flips"], 0)
 
 
+class GrowthChartSuppressionTests(unittest.TestCase):
+    """The per-turn growth chart is skipped whenever no turn has a comparable
+    delta. Skipping used to be silent, so a report showed only the
+    "insufficient data" badge and never said a chart existed and why it was
+    gone. These assert the reason is rendered instead."""
+
+    def _governance(self, records):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "transcript.jsonl"
+            source.write_text(
+                "\n".join(json.dumps(record) for record in records), encoding="utf-8"
+            )
+            session = load_session(source)
+        timeline = build_timeline(session)
+        stats = build_token_stats(session, timeline)
+        report = render_report(
+            session, timeline, [], judge_enabled=False, catalog_size=0, token_stats=stats
+        )
+        return report.split("<h2>Token Governance</h2>", 1)[1].split("<h2>", 1)[0], stats
+
+    @staticmethod
+    def _turn(seq, prompt_tokens, cache_read):
+        return [
+            {"type": "user", "timestamp": "2026-10-07T08:%02d:00Z" % seq,
+             "message": {"content": "request %d" % seq}},
+            {"type": "assistant", "timestamp": "2026-10-07T08:%02d:01Z" % seq, "message": {
+                "content": "reply %d" % seq,
+                "usage": {"input_tokens": prompt_tokens, "cache_read_input_tokens": cache_read,
+                          "cache_creation_input_tokens": 0, "output_tokens": 20},
+            }},
+        ]
+
+    def test_all_turns_unplottable_states_the_reason(self):
+        records = self._turn(0, 100, 800) + [
+            {"type": "system", "subtype": "compact_boundary", "uuid": "cb1",
+             "timestamp": "2026-10-07T08:00:30Z",
+             "compactMetadata": {"trigger": "auto", "preTokens": 900, "postTokens": 40}},
+        ] + self._turn(1, 200, 300)
+        section, stats = self._governance(records)
+
+        self.assertEqual(stats.bucket_shares, {})
+        self.assertTrue(stats.turn_growth[0].crossed_compaction)
+        self.assertIn("no per-turn growth chart: 0 of 2 main-agent turns plottable", section)
+        self.assertIn("1 crossed a compaction", section)
+        self.assertIn("1 is the last turn", section)
+        self.assertNotIn("<svg", section)
+
+    def test_single_plottable_turn_states_the_two_turn_minimum(self):
+        section, stats = self._governance(self._turn(0, 100, 800) + self._turn(1, 200, 1300))
+
+        self.assertTrue(stats.bucket_shares)
+        self.assertIn("no per-turn growth chart: 1 plottable turn", section)
+        self.assertIn("at least 2 are needed", section)
+        # the bucket table still carries the one turn's attribution
+        self.assertIn("<th>tokens added</th>", section)
+
+    def test_plottable_turns_render_the_chart_without_a_gap_note(self):
+        records = (self._turn(0, 100, 800) + self._turn(1, 200, 1300)
+                   + self._turn(2, 300, 1800))
+        section, _ = self._governance(records)
+
+        self.assertIn("<svg", section)
+        self.assertNotIn("no per-turn growth chart", section)
+
+
 class SkillLoadRenderTests(unittest.TestCase):
     """Spec Tests #2/#8 — render regressions on both surfaces.
 
