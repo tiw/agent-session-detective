@@ -81,7 +81,9 @@ def fingerprint(session_path: str, judge_model: str) -> str:
     # results for billing-only logs (Qoder/Codex) lack turn_growth.
     # v5 counts main-agent compactions only (subagent compaction windows
     # no longer inflate compaction_count or mark turns compaction-crossed).
-    return "%.3f:%d:%s:v5" % (newest, total, judge_model)
+    # v6 adds the IR 1.1 evidence-backed skill_loads block and drops the
+    # lifecycle cost claim — v5 cached results would render without it.
+    return "%.3f:%d:%s:v6" % (newest, total, judge_model)
 
 
 def cache_load(key: str, fp: str) -> Optional[dict]:
@@ -503,6 +505,20 @@ JOBS: Dict[str, Job] = {}
 JOBS_LOCK = threading.Lock()
 
 
+def _ir_adapter_id(session, source_path) -> str:
+    """Best-effort adapter id for the IR document (same fingerprints as cli)."""
+    if any(event.ref is not None for event in session.events):
+        return "qoder"
+    kinds = {event.type for event in session.events}
+    if "LLMRequest" in kinds:
+        return "kimi-cli"
+    if kinds & {"TurnTokens", "SubagentSpawned"}:
+        return "kimi-desktop"
+    if source_path.name.startswith("rollout-"):
+        return "codex"
+    return "unknown"
+
+
 def run_audit(job: Job) -> None:
     job.status = "running"
     job.started_at = time.time()
@@ -530,6 +546,14 @@ def run_audit(job: Job) -> None:
                 if_results.append(evaluate_playbook(judge, Path(playbook), session))
         job.mark("deriving next steps")
         token_stats = build_token_stats(session, timeline)
+        # The IR document is built here so the result carries the
+        # evidence-backed load ledger (IR 1.1) — the web layer previously
+        # imported no IR.
+        from .ir.analyses import skill_loads as skill_loads_rollup
+        from .ir.builder import build_audit_document
+
+        adapter_id = _ir_adapter_id(session, source_path)
+        document = build_audit_document(session, adapter_id)
         expected = job.params.get("expect") or []
         consumed = {n.lower() for n in timeline.consumed_skill_names()}
         expectations = [
@@ -544,13 +568,19 @@ def run_audit(job: Job) -> None:
             for name in expected
         ]
         missed = [f["skill_name"] for f in judgments_to_dict(judgments)["missed"]]
-        status_line = "%d loaded, %d file-read, %d missed triggers, IF %s" % (
+        load_block = skill_loads_rollup(document)
+        load_totals = load_block["totals"]
+        status_line = "%d loaded, %d file-read, %d missed triggers, IF %s, loads %d (%d costed, %d unavailable), reloads %d" % (
             len(timeline.loads),
             len(timeline.file_reads),
             len(missed),
             ", ".join(
                 "%s %.2f" % (r.playbook, r.coverage) for r in if_results
             ) or "off",
+            load_totals["loads"],
+            load_totals["loads"] - load_totals["unavailable"],
+            load_totals["unavailable"],
+            load_totals["reloads"],
         )
         job.result = {
             "session": {
@@ -564,6 +594,7 @@ def run_audit(job: Job) -> None:
             "expectations": expectations,
             "event_feed": event_feed_to_list(session),
             "token_stats": tokenstats_to_dict(token_stats),
+            "skill_loads": load_block,
             "no_self_invoke": sorted(
                 s.name for s in catalog if s.disable_model_invocation
             ),

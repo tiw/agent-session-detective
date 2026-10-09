@@ -1,9 +1,12 @@
 import json
+import re
 import tempfile
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
 
+import agent_session_detective
+from agent_session_detective.ir.builder import build_audit_document
 from agent_session_detective.report import render_report
 from agent_session_detective.timeline import build_timeline, estimate_tokens
 from agent_session_detective.tokenstats import BUCKET_KEYS, build_token_stats
@@ -333,11 +336,13 @@ class QoderTranscriptTests(unittest.TestCase):
         )
         self.assertEqual(events[0].ref, {
             "uuid": "u1", "parent_uuid": None, "is_sidechain": False,
+            "parent_tool_use_id": None,
             "request_id": None, "request_hash": None, "response_hash": None,
             "is_compact_summary": False,
         })
         assistant_ref = {
             "uuid": "a1", "parent_uuid": "u1", "is_sidechain": False,
+            "parent_tool_use_id": None,
             "request_id": "req-1", "request_hash": "r" * 64, "response_hash": "s" * 64,
             "is_compact_summary": False,
         }
@@ -728,6 +733,134 @@ class QoderTranscriptTests(unittest.TestCase):
 
         self.assertEqual(stats.hash_flips, 0)
         self.assertEqual(tokenstats_to_dict(stats)["hash_flips"], 0)
+
+
+class SkillLoadRenderTests(unittest.TestCase):
+    """Spec Tests #2/#8 — render regressions on both surfaces.
+
+    The session carries one evidence-backed load (Skill stub + hook_output
+    body) and one marker-only stub with no body, so every surface has both
+    a costable row and an "unavailable" row to render."""
+
+    BODY = '<skill_content name="demo">\nSteps of the demo skill\n</skill_content>'
+
+    def _session(self):
+        def rec(kind, uuid, parent, ts, **extra):
+            record = {
+                "type": kind, "uuid": uuid, "parentUuid": parent,
+                "isSidechain": False,
+                "timestamp": "2026-10-07T08:00:%02d.000Z" % ts,
+            }
+            record.update(extra)
+            return record
+
+        records = [
+            rec("user", "u1", None, 0,
+                message={"content": [{"type": "text", "text": "go"}]}),
+            rec("assistant", "a1", "u1", 1,
+                requestTokenAnchor={"request": "a" * 16, "response": "b" * 16,
+                                    "requestId": "req-1"},
+                message={"model": "qoder-pro",
+                         "content": [{"type": "tool_use", "id": "t1",
+                                      "name": "Skill",
+                                      "input": {"skill": "demo"}}],
+                         "usage": {"input_tokens": 1000, "output_tokens": 10}}),
+            rec("user", "u2", "a1", 2,
+                message={"content": [{"type": "tool_result",
+                                      "tool_use_id": "t1",
+                                      "content": "Launching skill: demo"}]}),
+            rec("attachment", "u3", "u2", 3,
+                attachment={"type": "hook_output", "output": self.BODY}),
+            rec("assistant", "a2", "u3", 4,
+                requestTokenAnchor={"request": "c" * 16, "response": "d" * 16,
+                                    "requestId": "req-2"},
+                message={"model": "qoder-pro",
+                         "content": [{"type": "tool_use", "id": "t2",
+                                      "name": "Skill",
+                                      "input": {"skill": "ghost"}}],
+                         "usage": {"input_tokens": 1100, "output_tokens": 10}}),
+            rec("user", "u4", "a2", 5,
+                message={"content": [{"type": "tool_result",
+                                      "tool_use_id": "t2",
+                                      "content": "Launching skill: ghost"}]}),
+            rec("assistant", "a3", "u4", 6,
+                requestTokenAnchor={"request": "e" * 16, "response": "f" * 16,
+                                    "requestId": "req-3"},
+                message={"model": "qoder-pro",
+                         "content": [{"type": "text", "text": "done"}],
+                         "usage": {"input_tokens": 1200, "output_tokens": 10}}),
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "transcript.jsonl"
+            source.write_text(
+                "\n".join(json.dumps(record) for record in records),
+                encoding="utf-8",
+            )
+            return load_session(source)
+
+    def _render(self, document):
+        session = self._session()
+        timeline = build_timeline(session)
+        stats = build_token_stats(session, timeline)
+        report = render_report(
+            session, timeline, [], judge_enabled=False, catalog_size=0,
+            token_stats=stats, document=document,
+        )
+        return report, timeline
+
+    def test_lifecycle_renders_marker_only_and_the_table_carries_costs(self):
+        document = build_audit_document(self._session(), "qoder")
+        bases = {row.skill_id: row.cost_basis for row in document.skill_loads}
+        self.assertEqual(bases, {"demo": "body", "ghost": "unavailable"})
+
+        report, _ = self._render(document)
+        lifecycle = report.split("<h2>Skill Lifecycle</h2>", 1)[1].split(
+            "<h2>", 1
+        )[0]
+        evidence = report.split(
+            "<h2>Skill loads (evidence-backed)</h2>", 1
+        )[1].split("<h2>", 1)[0]
+
+        # lifecycle: the marker label, both loads, and no cost anywhere
+        self.assertIn("load marker", lifecycle)
+        self.assertIn("demo", lifecycle)
+        self.assertIn("ghost", lifecycle)
+        self.assertIsNone(re.search(r"~\d", lifecycle))
+        self.assertNotIn("(EST)", lifecycle)
+
+        # evidence table: the body-derived cost labeled EST, the stub-only
+        # row labeled unavailable — and no other cost number in the section
+        est = "~%d (EST)" % estimate_tokens(self.BODY)
+        self.assertIn(est, evidence)
+        self.assertEqual(re.findall(r"~\d+", evidence), [est[:-6]])
+        self.assertIn("unavailable", evidence)
+        # totals line carries counts, not costs
+        self.assertIn(
+            "totals: 2 load(s), 1 with body, 1 unavailable, 0 reload(s), "
+            "0 redundant body(ies)",
+            evidence,
+        )
+
+    def test_without_a_document_no_cost_number_renders_anywhere(self):
+        report, _ = self._render(None)
+
+        # non-Qoder / pre-IR surfaces still get the honest marker-only label
+        self.assertIn("load marker", report)
+        self.assertNotIn("Skill loads (evidence-backed)", report)
+        self.assertNotIn("(EST)", report)
+        self.assertIsNone(re.search(r"~\d", report))
+
+    def test_webapp_lifecycle_line_carries_no_cost_field(self):
+        app_js = (
+            Path(agent_session_detective.__file__).parent / "webapp" / "app.js"
+        ).read_text(encoding="utf-8")
+
+        # the lifecycle loads map must not touch the stub-derived estimate
+        self.assertNotIn("l.tokens_est", app_js)
+        # the loads table is the only cost renderer, labeled EST/unavailable
+        self.assertIn('row.cost_basis === "body"', app_js)
+        self.assertIn('"~" + row.cost_tokens_est + " (EST)"', app_js)
+        self.assertIn("unavailable", app_js)
 
 
 if __name__ == "__main__":

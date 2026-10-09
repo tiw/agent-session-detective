@@ -1,0 +1,2 @@
+{"type": "user", "uuid": "j1", "parentUuid": null, "isSidechain": true, "timestamp": "2026-10-08T12:00:06.000Z", "message": {"content": [{"type": "text", "text": "please inspect the module"}]}}
+{"type": "assistant", "uuid": "j2", "parentUuid": "j1", "isSidechain": true, "timestamp": "2026-10-08T12:00:07.000Z", "requestTokenAnchor": {"request": "500000000000000a", "response": "500000000000000b", "requestId": "req-j1"}, "message": {"model": "qoder-pro", "content": [{"type": "text", "text": "ok"}], "usage": {"input_tokens": 900, "output_tokens": 10}}}

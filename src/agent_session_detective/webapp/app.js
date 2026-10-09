@@ -52,7 +52,12 @@
       "accelerating = 增量在涨）；六桶分解（system 桶是残差推断；skill = 技能正文，" +
       "inject = harness 包裹进你输入里的内容，tool = 其余工具结果，都按事件内容估）；" +
       "prompt 哈希翻转（llm.request 的 systemPromptHash/toolsHash 中途变化 = 前缀缓存失效）。" +
-      "点击柱子的柱子可以下钻：该轮每个桶各加了多少、注入的具体是什么内容。"
+      "点击柱子的柱子可以下钻：该轮每个桶各加了多少、注入的具体是什么内容。",
+    "loads":
+      "IR 1.1 证据化加载台账：stub（ Skill 工具的返回占位）与随后的正文出现按序配对，" +
+      "配上的行才给出成本 ~N (EST)；没有等到正文的行记 unavailable，只留 marker 不留猜测。" +
+      "reload = 压缩后正文重新出现；redundant bodies 是连续重复正文，只计数不产生行。" +
+      "这里是全报告唯一出现加载成本数字的地方。"
   };
 
   var TEMPLATES = {
@@ -608,8 +613,10 @@
         var ns = noSelf[l.skill_name.toLowerCase()]
           ? " " + badge("warn", "disable-model-invocation: 无法从日志区分点名/自调，需对照路由规则核对")
           : "";
+        // render rule: the lifecycle view has no body evidence, so no cost
+        // number is shown here at all (cost lives in the skill loads table)
         return "<details><summary>" + badge("fact", "loaded") + " " + esc(l.skill_name) +
-          " <span class='dim'>" + esc(fmtTs(l.ts)) + " · ~" + l.tokens_est + " tokens" +
+          " <span class='dim'>" + esc(fmtTs(l.ts)) +
           (l.evicted_by != null ? " · evicted?" : "") + "</span></summary>" +
           "<pre>" + esc(l.content_head) + "</pre>" + (ns ? "<p>" + ns + "</p>" : "") + "</details>";
       }).join("");
@@ -618,6 +625,36 @@
           " <span class='dim'>" + esc(f.origin) + "</span></summary><pre>" + esc(f.snippet_head) + "</pre></details>";
       }).join("");
       parts.push("<section><h2>skill lifecycle " + helpDot("lifecycle") + "</h2>" + (items || '<p class="dim">none detected.</p>') + "</section>");
+    }
+
+    // IR 1.1 evidence-backed load ledger: the only place a load cost number
+    // is rendered, always labeled EST or unavailable
+    if (r.skill_loads) {
+      var sl = r.skill_loads;
+      var loadRows = sl.rows.map(function (row) {
+        var cost = row.cost_basis === "body" && row.cost_tokens_est != null
+          ? "~" + row.cost_tokens_est + " (EST)"
+          : '<span class="unavailable">unavailable</span>';
+        return "<tr><td>" + esc(row.load_id) + "</td><td>" + esc(row.skill_id) +
+          "</td><td>" + esc(row.agent_id) + "</td><td>" + esc(fmtTs(row.ts)) +
+          "</td><td>" + esc(row.channel || "—") + "</td><td>" +
+          (row.kind === "reload" ? badge("warn", "reload") : esc(row.kind)) +
+          "</td><td>" + cost + "</td></tr>";
+      }).join("");
+      var loadTotals = sl.totals;
+      parts.push(
+        "<section><h2>skill loads (evidence-backed) " + helpDot("loads") + "</h2>" +
+        (loadRows
+          ? "<table><tr><th>load</th><th>skill</th><th>agent</th><th>time</th><th>channel</th><th>kind</th><th>cost</th></tr>" +
+            loadRows + "</table>"
+          : '<p class="dim">no load evidence rows.</p>') +
+        "<p class='dim'>loads " + loadTotals.loads + " · reloads " + loadTotals.reloads +
+        " · unavailable " + loadTotals.unavailable +
+        " · redundant bodies (no row) " + loadTotals.redundant_bodies +
+        " · cost ~" + loadTotals.cost_tokens_est + " (EST)" +
+        (loadTotals.unavailable ? " · unavailable rows carry the marker, not a guess" : "") +
+        "</p></section>"
+      );
     }
 
     parts.push(renderTokenStats(r.token_stats));

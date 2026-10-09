@@ -149,7 +149,7 @@ class IrCliTests(unittest.TestCase):
             self.assertEqual(exit_code, 0)
             document = json.loads(ir_path.read_text(encoding="utf-8"))
             self.assertEqual(document["adapter"]["id"], "qoder")
-            self.assertEqual(document["ir_version"], "1.0")
+            self.assertEqual(document["ir_version"], "1.1")
             self.assertEqual(
                 [call["call_id"] for call in document["requests"]],
                 ["main:0", "main:1", "main:2"],
@@ -157,7 +157,8 @@ class IrCliTests(unittest.TestCase):
             analyses = json.loads(analyses_path.read_text(encoding="utf-8"))
             self.assertEqual(
                 sorted(analyses),
-                ["context_organization", "redundancy", "skill_audit"],
+                ["context_organization", "dispatches", "redundancy",
+                 "skill_audit", "skill_loads"],
             )
             self.assertEqual(
                 [row["call_id"] for row in analyses["context_organization"]["rows"]],
@@ -176,7 +177,8 @@ class IrCliTests(unittest.TestCase):
             analyses = json.loads(analyses_path.read_text(encoding="utf-8"))
             self.assertEqual(
                 sorted(analyses),
-                ["context_organization", "redundancy", "skill_audit"],
+                ["context_organization", "dispatches", "redundancy",
+                 "skill_audit", "skill_loads"],
             )
             self.assertEqual(
                 [row["call_id"] for row in analyses["context_organization"]["rows"]],

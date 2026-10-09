@@ -12,7 +12,7 @@ from typing import Dict, List, Optional, Tuple
 
 from .. import __version__ as ASD_VERSION
 
-IR_VERSION = "1.0"
+IR_VERSION = "1.1"
 
 BUCKETS: Tuple[str, ...] = (
     "system",
@@ -98,6 +98,12 @@ class ContentItem:
     record: dict
     preview: str
     skill_id: Optional[str] = None
+    # Tool identity (IR 1.1): Qoder ToolCall payload "id" / ToolResult
+    # payload "tool_call_id". FACT — joins use string equality only.
+    tool_use_id: Optional[str] = None
+    # Phase stamp (IR 1.1): set by the builder when a dispatch's tier A/B
+    # recognition assigns one phase; null means no attribution (never guessed).
+    phase_id: Optional[str] = None
 
 
 @dataclass
@@ -153,6 +159,82 @@ class CoverageReport:
     unknown_channels: List[dict]
     dropped_records: Dict[str, int]
     notes: List[str]
+    # IR 1.1 evidence blocks: counted, re-derived from the document, never
+    # self-declared. Absent evidence is counted, not omitted.
+    skill_load_evidence: dict = field(default_factory=dict)
+    dispatch_links: dict = field(default_factory=dict)
+    phase_recognition: dict = field(default_factory=dict)
+
+
+@dataclass
+class LoadEvidence:
+    """One skill-load row (IR 1.1): a stub marker joined to its body item.
+
+    ``kind`` is "load" for the first body attached to a stub, "reload" when a
+    later body arrives after the previous body was compacted away. A cost is
+    the attached body's ``tokens_est`` (EST) or ``unavailable`` with
+    ``cost_tokens_est: null`` — a stub-derived number is never rendered.
+    """
+
+    load_id: str
+    agent_id: str
+    skill_id: str
+    kind: str  # "load" | "reload"
+    marker_item_id: Optional[str]
+    body_item_id: Optional[str]
+    body_sha1: Optional[str]
+    channel: Optional[str]
+    ts: Optional[float]
+    cost_tokens_est: Optional[int]
+    cost_basis: str  # "body" | "unavailable"
+
+
+@dataclass
+class Dispatch:
+    """One Agent tool call joined (string-equality on tool_use_id) to a
+    subagent transcript, with its brief and phase recognition (IR 1.1)."""
+
+    dispatch_id: str
+    parent_agent_id: str
+    tool_use_id: str
+    tool_item_id: str
+    subagent_agent_id: Optional[str]  # null for orphan calls
+    brief_item_id: Optional[str]
+    brief_tokens_est: Optional[int]
+    subagent_type: Optional[str]
+    description: Optional[str]
+    meta: Optional[dict]
+    phase_refs: List[dict]
+    phase_id: Optional[str]
+
+
+@dataclass
+class PhaseObservation:
+    """One piece of evidence behind a phase (IR 1.1).
+
+    ``kind: "dispatch"`` carries ``dispatch_id``; ``kind: "read"`` carries
+    ``item_id``. A multi-ref brief's dispatch observation carries
+    ``tokens_est: null`` so its cost is never counted across two phases.
+    """
+
+    kind: str  # "dispatch" | "read"
+    agent_id: str
+    dispatch_id: Optional[str] = None
+    item_id: Optional[str] = None
+    ts: Optional[float] = None
+    tokens_est: Optional[int] = None
+    channel: Optional[str] = None
+
+
+@dataclass
+class PhaseEntity:
+    """A recognized phase (IR 1.1): exists only where recognition evidence
+    exists — tier A (brief is the skill body) or tier B (rule match). A
+    phase attribution without evidence is never fabricated."""
+
+    phase_id: str
+    name: Optional[str] = None
+    observations: List[PhaseObservation] = field(default_factory=list)
 
 
 @dataclass
@@ -166,6 +248,9 @@ class AuditDocument:
     skills: List[SkillEntity]
     compactions: List[Compaction]
     coverage: CoverageReport
+    skill_loads: List[LoadEvidence] = field(default_factory=list)
+    dispatches: List[Dispatch] = field(default_factory=list)
+    phases: List[PhaseEntity] = field(default_factory=list)
     ir_version: str = IR_VERSION
     generator: dict = field(
         default_factory=lambda: {

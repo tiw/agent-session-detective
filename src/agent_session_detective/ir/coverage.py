@@ -6,7 +6,7 @@ zero still counts as fact; ``tokens_est`` is the one estimated entry.
 
 from __future__ import annotations
 
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from .items import Extraction
 from .schema import ContentItem, CoverageReport, LLMCall
@@ -56,6 +56,9 @@ def build_coverage(
     extraction: Extraction,
     dropped_records: Dict[str, int],
     notes: List[str],
+    skill_load_evidence: Optional[dict] = None,
+    dispatch_links: Optional[dict] = None,
+    phase_recognition: Optional[dict] = None,
 ) -> CoverageReport:
     anchored = sum(1 for call in calls if call.input.anchor_tokens is not None)
     tier_counts = {1: 0, 2: 0, 3: 0}
@@ -86,4 +89,7 @@ def build_coverage(
             reason: count for reason, count in sorted(dropped_records.items())
         },
         notes=list(notes),
+        skill_load_evidence=skill_load_evidence or {},
+        dispatch_links=dispatch_links or {},
+        phase_recognition=phase_recognition or {},
     )

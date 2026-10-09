@@ -12,11 +12,14 @@ from agent_session_detective.wire import load_session
 
 
 class IREventsTestCase(unittest.TestCase):
-    def load_lines(self, lines, subagents=None, name="transcript.jsonl"):
+    def load_lines(self, lines, subagents=None, subagent_metas=None,
+                   name="transcript.jsonl"):
         """Write ``lines`` (list of dicts) to a temp dir and load the session.
 
         ``subagents`` maps stem -> list of record dicts, written to
         ``<parent-stem>/subagents/<stem>.jsonl`` next to the transcript.
+        ``subagent_metas`` maps stem -> meta dict, written as the
+        ``<stem>.meta.json`` sidecar the wire loader reads.
         """
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
@@ -31,6 +34,11 @@ class IREventsTestCase(unittest.TestCase):
             (sub_dir / ("%s.jsonl" % stem)).write_text(
                 "\n".join(json.dumps(record) for record in records), encoding="utf-8"
             )
+            meta = (subagent_metas or {}).get(stem)
+            if meta is not None:
+                (sub_dir / ("%s.meta.json" % stem)).write_text(
+                    json.dumps(meta), encoding="utf-8"
+                )
         return load_session(source)
 
 

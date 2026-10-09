@@ -24,8 +24,10 @@ from typing import Dict, List, Optional, Tuple
 from ..wire import Session
 from .compactions import build_compactions
 from .coverage import build_coverage
+from .dispatch import build_dispatches
 from .estimator import ESTIMATOR_VERSION
 from .items import Extraction, extract_items
+from .loads import build_loads
 from .records import (
     AgentRecords,
     WireRecord,
@@ -269,6 +271,16 @@ def build_audit_document(session: Session, adapter_id: str) -> AuditDocument:
             seq_ts[(record.source, record.seq)] = record.ts
         tiers[agent.agent_id] = detect_tier(agent.records)
 
+    # Dispatch join + brief classification (D3) runs before compactions and
+    # span/bucket aggregation: the brief re-bucket (user -> inject) must be
+    # in place when _build_call aggregates bucket tallies, so the invariant
+    # "sum of buckets + unattributed == anchor" is computed once, from the
+    # final classification (spec: the binding constraint wins over the
+    # module-placement listing order).
+    dispatches, phases, dispatch_links, phase_recognition = build_dispatches(
+        agents, extraction.items, session.subagent_meta, seq_ts
+    )
+
     compactions = build_compactions(agents, extraction.items)
 
     all_calls: List[LLMCall] = []
@@ -296,6 +308,27 @@ def build_audit_document(session: Session, adapter_id: str) -> AuditDocument:
     skills = build_skills(
         extraction.items, all_calls, seq_ts, extraction.listing_lines
     )
+    skill_loads, redundant_bodies = build_loads(
+        skills, extraction.items, agents
+    )
+    channel_counts: Dict[str, int] = {}
+    for load in skill_loads:
+        if load.channel is not None:
+            channel_counts[load.channel] = channel_counts.get(load.channel, 0) + 1
+    skill_load_evidence = {
+        "loads": sum(1 for load in skill_loads if load.kind == "load"),
+        "reloads": sum(1 for load in skill_loads if load.kind == "reload"),
+        "with_body": sum(
+            1 for load in skill_loads if load.cost_basis == "body"
+        ),
+        "unavailable": sum(
+            1 for load in skill_loads if load.cost_basis == "unavailable"
+        ),
+        "redundant_bodies": redundant_bodies,
+        "channels": {
+            channel: channel_counts[channel] for channel in sorted(channel_counts)
+        },
+    }
     agents_out = [_context_agent(agent, all_calls) for agent in agents]
     coverage = build_coverage(
         all_calls,
@@ -307,6 +340,9 @@ def build_audit_document(session: Session, adapter_id: str) -> AuditDocument:
         extraction=extraction,
         dropped_records=_dropped(session.events),
         notes=_notes(adapter_id, tiers),
+        skill_load_evidence=skill_load_evidence,
+        dispatch_links=dispatch_links,
+        phase_recognition=phase_recognition,
     )
     return AuditDocument(
         adapter={"id": adapter_id, "version": ADAPTER_VERSION},
@@ -318,4 +354,7 @@ def build_audit_document(session: Session, adapter_id: str) -> AuditDocument:
         skills=skills,
         compactions=compactions,
         coverage=coverage,
+        skill_loads=skill_loads,
+        dispatches=dispatches,
+        phases=phases,
     )

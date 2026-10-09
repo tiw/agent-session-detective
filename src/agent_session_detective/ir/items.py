@@ -114,7 +114,7 @@ def extract_items(records: List[WireRecord], agent_id: str) -> Extraction:
     part_index = 0
 
     def add(record, bucket, kind, text, channel, skill_id=None, name=None,
-            by_signature=False):
+            by_signature=False, tool_use_id=None):
         nonlocal part_index
         if not isinstance(text, str):
             text = flatten_text(text)
@@ -134,6 +134,7 @@ def extract_items(records: List[WireRecord], agent_id: str) -> Extraction:
             record={"file": record.source, "seq": record.seq, "uuid": record.uuid},
             preview=text[:200],
             skill_id=skill_id,
+            tool_use_id=tool_use_id,
         )
         extraction.items.append(item)
         part_index += 1
@@ -179,7 +180,8 @@ def extract_items(records: List[WireRecord], agent_id: str) -> Extraction:
                         if tool_call_id is not None:
                             pending_case_reads[tool_call_id] = file_path
                 add(record, "assistant", "tool_call", arguments, "qoder:assistant",
-                    skill_id=skill_id, name=name or None)
+                    skill_id=skill_id, name=name or None,
+                    tool_use_id=event.payload.get("id"))
             elif event.type == "TurnBegin":
                 texts = [
                     part.get("text")
@@ -210,17 +212,21 @@ def extract_items(records: List[WireRecord], agent_id: str) -> Extraction:
                 if stub_match:
                     display = stub_match.group(1).strip()
                     add(record, "skill", "skill_stub", text, "qoder:tool_result",
-                        skill_id=display.lower(), name=display)
+                        skill_id=display.lower(), name=display,
+                        tool_use_id=tool_call_id)
                 elif tool_call_id is not None and tool_call_id in pending_case_reads:
                     file_path = pending_case_reads.pop(tool_call_id)
                     if return_value.get("is_error"):
-                        add(record, "tool", "tool_result", text, "qoder:tool_result")
+                        add(record, "tool", "tool_result", text, "qoder:tool_result",
+                            tool_use_id=tool_call_id)
                     else:
                         folder = os.path.basename(os.path.dirname(file_path.rstrip("/")))
                         add(record, "tool", "tool_result", text, "qoder:tool_result",
-                            skill_id=folder.lower() or None, name=folder or None)
+                            skill_id=folder.lower() or None, name=folder or None,
+                            tool_use_id=tool_call_id)
                 else:
-                    add(record, "tool", "tool_result", text, "qoder:tool_result")
+                    add(record, "tool", "tool_result", text, "qoder:tool_result",
+                        tool_use_id=tool_call_id)
             elif event.type == "Attachment":
                 attachment = event.payload.get("attachment")
                 if not isinstance(attachment, dict):

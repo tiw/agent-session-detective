@@ -6,13 +6,15 @@ import unittest
 from pathlib import Path
 
 from agent_session_detective.ir.builder import build_audit_document
+from agent_session_detective.ir.loads import build_loads
 from agent_session_detective.wire import load_session
 from tests.ir_helpers import assert_adapter_contract
 
 FIXTURES = Path(__file__).parent / "fixtures" / "ir"
 ALL_FIXTURES = ["tier1.jsonl", "tier2.jsonl", "tier3.jsonl",
                 "tier3-usage.jsonl", "compaction.jsonl",
-                "reinject.jsonl", "attachments.jsonl", "calibration.jsonl"]
+                "reinject.jsonl", "attachments.jsonl", "calibration.jsonl",
+                "dispatch.jsonl"]
 
 
 def build(name):
@@ -124,6 +126,8 @@ class CoverageLedgerTest(unittest.TestCase):
         "reinject.jsonl": (1, 0, 0),
         "attachments.jsonl": (1, 0, 0),
         "calibration.jsonl": (1, 0, 0),
+        # main + three tier-1 subagent transcripts, each grouped by anchor
+        "dispatch.jsonl": (4, 0, 0),
     }
     CHECKED_CALLS = {
         "tier1.jsonl": 3,
@@ -134,6 +138,8 @@ class CoverageLedgerTest(unittest.TestCase):
         "reinject.jsonl": 3,
         "attachments.jsonl": 7,
         "calibration.jsonl": 2,
+        # three main spans + one span per subagent transcript
+        "dispatch.jsonl": 6,
     }
 
     def test_coverage_reconciles_with_the_document_ledger(self):
@@ -173,6 +179,164 @@ class CoverageLedgerTest(unittest.TestCase):
                 sum(1 for call in calls if call.identity_tier == 1),
                 name,
             )
+
+
+class EvidencePropertiesTest(unittest.TestCase):
+    """IR 1.1 evidence invariants (spec Tests #6), re-derived from the
+    document itself rather than from the builders' own counters. The
+    Σbuckets + unattributed == anchor half of the item is already enforced
+    for every fixture (dispatch.jsonl included) by AdapterContractTest via
+    ``assert_adapter_contract`` — D3's re-bucketed briefs live inside that
+    same bucket sum."""
+
+    def test_load_rows_resolve_and_costs_come_only_from_body_items(self):
+        for name in ALL_FIXTURES:
+            document = build(name)
+            items_by_id = {item.item_id: item for item in document.items}
+            agent_ids = {agent.agent_id for agent in document.agents}
+            for row in document.skill_loads:
+                self.assertIn(row.agent_id, agent_ids, name)
+                # biconditional: a cost exists exactly when a body was joined
+                self.assertEqual(
+                    row.cost_tokens_est is None,
+                    row.cost_basis == "unavailable",
+                    name,
+                )
+                if row.body_item_id is None:
+                    self.assertIsNone(row.cost_tokens_est, name)
+                    self.assertIsNone(row.body_sha1, name)
+                else:
+                    body = items_by_id[row.body_item_id]
+                    self.assertEqual(body.kind, "skill_body", name)
+                    self.assertEqual(row.skill_id, body.skill_id, name)
+                    self.assertEqual(
+                        row.cost_tokens_est, body.tokens_est, name
+                    )
+                    self.assertEqual(row.body_sha1, body.sha1, name)
+                if row.marker_item_id is not None:
+                    marker = items_by_id[row.marker_item_id]
+                    self.assertEqual(marker.kind, "skill_stub", name)
+                    self.assertEqual(row.skill_id, marker.skill_id, name)
+                # a stub estimate is never promoted into a load cost: the
+                # only cost source is the joined body item above
+                self.assertIn(row.cost_basis, ("body", "unavailable"), name)
+
+    def test_skill_load_evidence_counters_equal_an_independent_recount(self):
+        for name in ALL_FIXTURES:
+            document = build(name)
+            rows = document.skill_loads
+            channels = {}
+            for row in rows:
+                if row.channel is not None:
+                    channels[row.channel] = channels.get(row.channel, 0) + 1
+            _, redundant = build_loads(
+                document.skills, document.items, document.agents
+            )
+            self.assertEqual(
+                document.coverage.skill_load_evidence,
+                {
+                    "loads": sum(1 for r in rows if r.kind == "load"),
+                    "reloads": sum(1 for r in rows if r.kind == "reload"),
+                    "with_body": sum(
+                        1 for r in rows if r.cost_basis == "body"
+                    ),
+                    "unavailable": sum(
+                        1 for r in rows if r.cost_basis == "unavailable"
+                    ),
+                    "redundant_bodies": redundant,
+                    "channels": {
+                        channel: channels[channel]
+                        for channel in sorted(channels)
+                    },
+                },
+                name,
+            )
+
+    def test_dispatch_links_reconcile_with_the_dispatch_list(self):
+        for name in ALL_FIXTURES:
+            document = build(name)
+            dispatches = document.dispatches
+            items_by_id = {item.item_id: item for item in document.items}
+            agent_ids = {agent.agent_id for agent in document.agents}
+            links = document.coverage.dispatch_links
+
+            self.assertEqual(links["dispatches"], len(dispatches), name)
+            self.assertEqual(
+                links["joined"] + links["joined_via_meta_only"]
+                + links["orphan_dispatches"],
+                len(dispatches),
+                name,
+            )
+            self.assertEqual(
+                links["briefs_found"] + links["briefs_missing"],
+                len(dispatches),
+                name,
+            )
+            self.assertEqual(
+                links["briefs_found"],
+                sum(1 for d in dispatches if d.brief_item_id is not None),
+                name,
+            )
+            self.assertEqual(
+                links["orphan_dispatches"],
+                sum(1 for d in dispatches if d.subagent_agent_id is None),
+                name,
+            )
+            for dispatch in dispatches:
+                tool_item = items_by_id[dispatch.tool_item_id]
+                self.assertEqual(tool_item.kind, "tool_call", name)
+                self.assertEqual(
+                    tool_item.tool_use_id, dispatch.tool_use_id, name
+                )
+                if dispatch.subagent_agent_id is not None:
+                    self.assertIn(dispatch.subagent_agent_id, agent_ids, name)
+                if dispatch.brief_item_id is not None:
+                    self.assertIn(dispatch.brief_item_id, items_by_id, name)
+
+    def test_phase_recognition_reconciles_under_the_shipped_empty_rules(self):
+        for name in ALL_FIXTURES:
+            document = build(name)
+            recognition = document.coverage.phase_recognition
+            items_by_id = {item.item_id: item for item in document.items}
+            dispatch_ids = {d.dispatch_id for d in document.dispatches}
+
+            # shipped RULES are empty: tier B never fires, tier A is exactly
+            # the set of signature-brief dispatches
+            tier_a = sum(
+                1 for d in document.dispatches
+                if d.brief_item_id is not None
+                and items_by_id[d.brief_item_id].kind == "skill_body"
+            )
+            self.assertEqual(
+                recognition["tierA"] + recognition["tierB"]
+                + recognition["tierC"],
+                len(document.dispatches),
+                name,
+            )
+            self.assertEqual(recognition["tierA"], tier_a, name)
+            self.assertEqual(recognition["tierB"], 0, name)
+            self.assertIsNone(recognition["rule_set_version"], name)
+            self.assertTrue(recognition["corpus_note"], name)
+
+            # phases exist only on recognition evidence and reference only
+            # objects that exist in the document; under the shipped empty
+            # rules every dispatch observation carries the tier A brief cost
+            brief_tokens = {
+                d.dispatch_id: d.brief_tokens_est for d in document.dispatches
+            }
+            for phase in document.phases:
+                self.assertGreater(len(phase.observations), 0, name)
+                for observation in phase.observations:
+                    if observation.dispatch_id is not None:
+                        self.assertIn(observation.dispatch_id, dispatch_ids,
+                                      name)
+                        self.assertEqual(
+                            observation.tokens_est,
+                            brief_tokens[observation.dispatch_id],
+                            name,
+                        )
+                    if observation.item_id is not None:
+                        self.assertIn(observation.item_id, items_by_id, name)
 
 
 class FixtureParityTest(unittest.TestCase):

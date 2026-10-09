@@ -18,7 +18,7 @@ from agent_session_detective.wire import load_session
 FIXTURES = Path(__file__).parent / "fixtures" / "ir"
 ALL_FIXTURES = ["tier1.jsonl", "tier2.jsonl", "tier3.jsonl",
                 "tier3-usage.jsonl", "compaction.jsonl",
-                "reinject.jsonl", "attachments.jsonl"]
+                "reinject.jsonl", "attachments.jsonl", "dispatch.jsonl"]
 
 ZERO_BUCKETS = dict.fromkeys(BUCKETS, 0)
 
@@ -245,7 +245,8 @@ class CrossFixtureTest(unittest.TestCase):
                 analyses = build_analyses(document)
                 self.assertEqual(
                     sorted(analyses),
-                    ["context_organization", "redundancy", "skill_audit"],
+                    ["context_organization", "dispatches", "redundancy",
+                     "skill_audit", "skill_loads"],
                 )
                 items_by_id = {item.item_id: item for item in document.items}
                 rows = analyses["context_organization"]["rows"]

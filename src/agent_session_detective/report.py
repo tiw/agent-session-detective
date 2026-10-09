@@ -9,13 +9,16 @@ from __future__ import annotations
 
 import html
 from datetime import datetime
-from typing import List, Optional
+from typing import List, Optional, TYPE_CHECKING
 
 from .if_eval import IFResult
 from .judge import Judgment
 from .timeline import Timeline
 from .tokenstats import BUCKET_KEYS, TokenStats
 from .wire import Session
+
+if TYPE_CHECKING:  # import cycle: report is rendered above the IR in cli.py
+    from .ir.schema import AuditDocument
 
 CSS = """
 :root { --ink:#1a1d21; --dim:#5b6470; --line:#e3e6ea; --fact:#0b6bcb;
@@ -239,6 +242,7 @@ def render_report(
     if_results: Optional[List["IFResult"]] = None,
     token_stats: Optional[TokenStats] = None,
     no_self_invoke: Optional[set] = None,
+    document: Optional["AuditDocument"] = None,
 ) -> str:
     if_results = if_results or []
     missed = [j for j in judgments if j.triggered]
@@ -388,11 +392,14 @@ def render_report(
                 "against the routing rules</span>"
             )
         origin = "" if load.origin == "main" else '<span class="badge">%s</span>' % esc(load.origin)
+        # Render rule (unconditional): the lifecycle line renders a marker,
+        # never a stub-derived cost. Load costs render only in the
+        # evidence-backed section below, labeled EST or "unavailable".
         parts.append(
             "<details><summary><span class='badge fact'>loaded</span> %s %s%s "
-            "<span class='meta'>%s · ~%d tokens</span></summary><div class='body'>"
+            "<span class='meta'>%s · load marker</span></summary><div class='body'>"
             % (
-                esc(load.skill_name), origin, eviction, fmt_ts(load.ts), load.tokens_est,
+                esc(load.skill_name), origin, eviction, fmt_ts(load.ts),
             )
         )
         ctx = (
@@ -409,6 +416,59 @@ def render_report(
         if load.content:
             parts.append("<pre>%s</pre>" % esc(load.content[:4000]))
         parts.append("</div></details>")
+
+    # --- Skill loads (evidence-backed) ---
+    if document is not None:
+        coverage_block = document.coverage.skill_load_evidence or {}
+        parts.append("<h2>Skill loads (evidence-backed)</h2>")
+        if not document.skill_loads:
+            parts.append(
+                "<p class='empty'>No skill-load evidence in this session: no stub "
+                "markers and no skill-body items were observed.</p>"
+            )
+        else:
+            parts.append(
+                "<p class='meta'>Cost is the attached body item's tokens_est (EST) — "
+                "the body the log actually carries. A load with no body renders "
+                "'unavailable'; a stub-derived number is never shown. Reload = the "
+                "previous body was compacted away; redundant bodies are counted "
+                "without rows.</p>"
+            )
+            parts.append(
+                "<table><tr><th>load</th><th>skill</th><th>agent</th><th>time</th>"
+                "<th>channel</th><th>kind</th><th>cost</th></tr>"
+            )
+            for load in document.skill_loads:
+                if load.cost_basis == "body":
+                    cost = "~%d (EST)" % load.cost_tokens_est
+                else:
+                    cost = "<span class='badge infer'>unavailable</span>"
+                kind_badge = (
+                    "<span class='badge infer'>reload</span>"
+                    if load.kind == "reload"
+                    else "<span class='badge'>load</span>"
+                )
+                parts.append(
+                    "<tr><td><code>%s</code></td><td>%s</td><td>%s</td><td>%s</td>"
+                    "<td>%s</td><td>%s</td><td>%s</td></tr>"
+                    % (
+                        esc(load.load_id), esc(load.skill_id), esc(load.agent_id),
+                        fmt_ts(load.ts), esc(load.channel or "—"),
+                        kind_badge, cost,
+                    )
+                )
+            parts.append("</table>")
+            parts.append(
+                "<p class='meta'>totals: %d load(s), %d with body, %d unavailable, "
+                "%d reload(s), %d redundant body(ies)</p>"
+                % (
+                    coverage_block.get("loads", 0),
+                    coverage_block.get("with_body", 0),
+                    coverage_block.get("unavailable", 0),
+                    coverage_block.get("reloads", 0),
+                    coverage_block.get("redundant_bodies", 0),
+                )
+            )
 
     # --- Compaction markers ---
     if timeline.compactions:

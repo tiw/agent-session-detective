@@ -29,7 +29,7 @@ import json
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Iterator, List, Optional
+from typing import Dict, Iterator, List, Optional
 
 
 @dataclass
@@ -93,6 +93,10 @@ class Session:
     events: List[Event] = field(default_factory=list)
     protocol_version: Optional[str] = None
     compaction_telemetry_available: bool = True
+    # Qoder only: meta.json sidecar per subagent file, keyed by the subagent
+    # origin ("subagent:<stem>"). Malformed or missing files are counted as
+    # RecordDropped events, never guessed.
+    subagent_meta: Dict[str, dict] = field(default_factory=dict)
 
     def turns(self) -> List[Event]:
         return [e for e in self.events if e.type == "TurnBegin"]
@@ -379,6 +383,7 @@ def _qoder_ref(record: dict) -> dict:
         "uuid": record.get("uuid"),
         "parent_uuid": record.get("parentUuid"),
         "is_sidechain": record.get("isSidechain"),
+        "parent_tool_use_id": record.get("parentToolUseId"),
         "request_id": request_id,
         "request_hash": anchor.get("request"),
         "response_hash": anchor.get("response"),
@@ -653,6 +658,35 @@ def load_session(directory: Path) -> Session:
                     for sub_file in sorted(sub_dir.glob("*.jsonl")):
                         sub_origin = "subagent:%s" % sub_file.stem
                         session.events.extend(parse_qoder_transcript(sub_file, origin=sub_origin))
+                        # meta.json sidecar: harness-written spawn facts
+                        # (toolUseId, invocationName, ...). Missing or
+                        # malformed files are counted, never guessed.
+                        meta_path = sub_file.with_suffix(".meta.json")
+                        if not meta_path.exists():
+                            session.events.append(Event(
+                                None, "RecordDropped",
+                                {"reason": "meta_json_missing"},
+                                sub_origin, meta_path, 1, None,
+                            ))
+                            continue
+                        try:
+                            with open(meta_path, "r", encoding="utf-8") as meta_fh:
+                                meta = json.load(meta_fh)
+                        except (OSError, IOError, json.JSONDecodeError, ValueError):
+                            session.events.append(Event(
+                                None, "RecordDropped",
+                                {"reason": "meta_json_malformed"},
+                                sub_origin, meta_path, 1, None,
+                            ))
+                            continue
+                        if isinstance(meta, dict):
+                            session.subagent_meta[sub_origin] = meta
+                        else:
+                            session.events.append(Event(
+                                None, "RecordDropped",
+                                {"reason": "meta_json_malformed"},
+                                sub_origin, meta_path, 1, None,
+                            ))
             session.events.sort(key=lambda e: (e.ts is None, e.ts or 0.0, e.seq))
             return session
 

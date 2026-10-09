@@ -106,12 +106,14 @@ def main(argv=None) -> int:
         print("No events parsed from %s" % session_source, file=sys.stderr)
         return 1
 
-    if args.ir_out or args.ir_analyses:
-        document = build_audit_document(session, _detect_adapter(session, session_source))
-        if args.ir_out:
-            _write_json(Path(args.ir_out), document.to_dict())
-        if args.ir_analyses:
-            _write_json(Path(args.ir_analyses), build_analyses(document))
+    # The document is always built: the report renders the evidence-backed
+    # load section from it. --ir-out/--ir-analyses keep serializing it
+    # unchanged.
+    document = build_audit_document(session, _detect_adapter(session, session_source))
+    if args.ir_out:
+        _write_json(Path(args.ir_out), document.to_dict())
+    if args.ir_analyses:
+        _write_json(Path(args.ir_analyses), build_analyses(document))
 
     timeline = build_timeline(session)
     catalog = load_catalog(extra_dirs=args.skills_dir)
@@ -154,6 +156,7 @@ def main(argv=None) -> int:
         if_results=if_results,
         token_stats=token_stats,
         no_self_invoke={s.name.lower() for s in catalog if s.disable_model_invocation},
+        document=document,
     )
     out_path = Path(args.out) if args.out else _default_output_path(session_source)
     out_path.write_text(report, encoding="utf-8")
