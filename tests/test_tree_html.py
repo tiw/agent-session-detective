@@ -19,6 +19,9 @@ class SelfContainedTest(unittest.TestCase):
         self.assertNotIn("<script", out)
         self.assertNotIn("http://", out)
         self.assertNotIn("https://", out)
+        self.assertNotIn("src=", out)
+        self.assertNotIn("href=", out)
+        self.assertNotIn("url(", out)
 
     def test_determinism(self):
         kwargs = dict(
