@@ -366,6 +366,29 @@ def _is_qoder_record(record: dict) -> bool:
     return record.get("type") in ("user", "assistant", "metadata")
 
 
+def _qoder_human_text(record: dict) -> Optional[str]:
+    """Text that arrived on the human-input channel, verbatim, separate from the
+    harness expansion in ``message.content``.
+
+    Channel, not author. ``origin.kind`` is ``"human"`` on every record that
+    carries ``humanInput.text``, so it discriminates nothing: the same channel
+    also delivers a subagent's opening record, where the text is the parent
+    agent's Task brief rather than operator keystrokes. Roughly half the
+    records corpus-wide are such briefs, and they are separable only by agent
+    attribution, which is built later. So this reports the raw fact and
+    ``ir.items`` decides whether to stamp it, keeping the top-level
+    conversation alone.
+
+    The terminal CLI format writes neither field, so there the typed text is not
+    recoverable and this stays None instead of being inferred from the expansion.
+    """
+    human_input = record.get("humanInput")
+    if not isinstance(human_input, dict):
+        return None
+    text = human_input.get("text")
+    return text if isinstance(text, str) else None
+
+
 def _qoder_ref(record: dict) -> dict:
     """Identity of one transcript record, shared by every event parsed from it.
 
@@ -392,6 +415,7 @@ def _qoder_ref(record: dict) -> dict:
         "request_hash": anchor.get("request"),
         "response_hash": anchor.get("response"),
         "is_compact_summary": bool(record.get("isCompactSummary")),
+        "human_text": _qoder_human_text(record),
     }
 
 

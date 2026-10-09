@@ -246,7 +246,7 @@ class Tier1GoldenTest(unittest.TestCase):
                 "qoder: prefix_hashes are not exposed by the transcript; left null",
             ],
         )
-        self.assertEqual(document.ir_version, "1.2")
+        self.assertEqual(document.ir_version, "1.3")
         self.assertEqual(document.adapter, {"id": "qoder", "version": "1.0"})
         self.assertEqual(document.estimator_version, "cjk-1.0")
         self.assertEqual(

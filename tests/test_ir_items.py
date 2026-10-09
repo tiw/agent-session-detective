@@ -19,6 +19,20 @@ def user(seq, text, uuid=None):
     }
 
 
+def human(seq, typed, expanded, uuid=None):
+    """A Qoder IDE turn: origin.kind=="human" and humanInput.text is what the
+    operator typed, while message.content is the harness expansion sent to the
+    model. Real records carry content as a str, so the fixture does too."""
+    return {
+        "type": "user",
+        "uuid": uuid or "h%d" % seq,
+        "timestamp": "2026-10-07T08:00:%02d.000Z" % seq,
+        "origin": {"kind": "human"},
+        "humanInput": {"text": typed, "mode": "prompt"},
+        "message": {"content": expanded},
+    }
+
+
 def assistant(seq, content, usage=None):
     record = {
         "type": "assistant",
@@ -318,6 +332,64 @@ class ItemsTest(IREventsTestCase):
         self.assertEqual(item.bucket, "user")
         self.assertEqual(item.kind, "user_message")
         self.assertEqual(item.size_chars, 0)
+
+    def test_human_input_text_is_projected_verbatim_not_the_harness_expansion(self):
+        expansion = "A goal has been set.\n\n" + "x" * 4000
+        extraction = self.extract([human(1, "/goal 制定计划", expansion)])
+        item = extraction.items[0]
+
+        self.assertEqual(item.bucket, "user")
+        self.assertEqual(item.human_text, "/goal 制定计划")
+        self.assertEqual(item.size_chars, len(expansion))
+        self.assertTrue(item.preview.startswith("A goal has been set."))
+
+    def test_human_text_survives_rebucketing_into_skill_body(self):
+        expansion = (
+            "Base directory for this skill: /Users/x/.agents/skills/archify\n\n"
+            "# Archify\n" + "y" * 200
+        )
+        extraction = self.extract([human(1, "/archify", expansion)])
+        item = extraction.items[0]
+
+        self.assertEqual(item.bucket, "skill")
+        self.assertEqual(item.kind, "skill_body")
+        self.assertEqual(item.skill_id, "archify")
+        self.assertEqual(item.human_text, "/archify")
+
+    def test_human_text_is_none_when_the_log_does_not_vouch_for_it(self):
+        extraction = self.extract([user(1, "普通一句话")])
+
+        self.assertIsNone(extraction.items[0].human_text)
+
+    def test_human_text_is_only_stamped_for_the_top_level_conversation(self):
+        """A subagent's first record also arrives on the human-input channel, but
+        what it carries is the parent agent's Task brief. Over the real corpus
+        those records split cleanly by file: every main-file one has isSidechain
+        false and every subagent-file one has it true, with no crossover, and
+        the subagent side is close to half the total. Stamping the latter would
+        feed agent-written briefs to friction mining as human interventions, so
+        the drop is counted rather than silent."""
+        brief = "Read-only investigation. Search breadth: very thorough."
+        for agent_id in ("subagent:agent-aExplore-067dc410ced4f82a", "sidechain:u9"):
+            extraction = self.extract([human(1, brief, brief)], agent_id=agent_id)
+            self.assertIsNone(extraction.items[0].human_text, agent_id)
+            self.assertEqual(extraction.human_text_dropped, 1, agent_id)
+
+        extraction = self.extract([human(1, brief, brief)], agent_id="main")
+        self.assertEqual(extraction.items[0].human_text, brief)
+        self.assertEqual(extraction.human_text_dropped, 0)
+
+    def test_malformed_human_input_degrades_to_none(self):
+        blank = human(1, "真的输入", "expanded")
+        blank["humanInput"] = {"text": None, "mode": "prompt"}
+        junk = human(2, "真的输入", "expanded")
+        junk["humanInput"] = "not-a-dict"
+        absent = human(3, "真的输入", "expanded")
+        del absent["humanInput"]
+        extraction = self.extract([blank, junk, absent])
+
+        self.assertEqual([item.human_text for item in extraction.items], [None, None, None])
+        self.assertEqual([item.bucket for item in extraction.items], ["user"] * 3)
 
 
 if __name__ == "__main__":

@@ -119,7 +119,7 @@ def _minimal_document():
 
 class SchemaTest(unittest.TestCase):
     def test_constants(self):
-        self.assertEqual(IR_VERSION, "1.2")
+        self.assertEqual(IR_VERSION, "1.3")
         self.assertEqual(
             BUCKETS,
             ("system", "tools", "user", "inject", "skill", "assistant", "tool"),
@@ -130,11 +130,20 @@ class SchemaTest(unittest.TestCase):
         document = _minimal_document()
         payload = document.to_dict()
         revived = json.loads(json.dumps(payload))
-        self.assertEqual(revived["ir_version"], "1.2")
+        self.assertEqual(revived["ir_version"], "1.3")
         self.assertEqual(revived["adapter"], {"id": "qoder", "version": "1.0"})
         self.assertEqual(revived["requests"][0]["call_id"], "main:0")
         self.assertEqual(revived["items"][0]["bucket"], "user")
         self.assertEqual(revived["skills"][0]["observations"][0]["kind"], "listing")
+
+    def test_human_text_defaults_to_none_and_round_trips(self):
+        payload = _minimal_document().to_dict()
+        self.assertIsNone(payload["items"][0]["human_text"])
+
+        typed = _minimal_document()
+        typed.items[0].human_text = "/goal 制定计划"
+        revived = json.loads(json.dumps(typed.to_dict()))
+        self.assertEqual(revived["items"][0]["human_text"], "/goal 制定计划")
 
     def test_generator_reports_package_version(self):
         self.assertEqual(
@@ -198,6 +207,7 @@ class SchemaTest(unittest.TestCase):
                 "bucket",
                 "channel",
                 "gone_seq",
+                "human_text",
                 "item_id",
                 "kind",
                 "name",

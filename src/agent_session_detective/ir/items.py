@@ -106,6 +106,7 @@ class Extraction:
     envelope: int = 0
     signature: int = 0
     conflicts: int = 0
+    human_text_dropped: int = 0
 
 
 def extract_items(records: List[WireRecord], agent_id: str) -> Extraction:
@@ -114,7 +115,7 @@ def extract_items(records: List[WireRecord], agent_id: str) -> Extraction:
     part_index = 0
 
     def add(record, bucket, kind, text, channel, skill_id=None, name=None,
-            by_signature=False, tool_use_id=None):
+            by_signature=False, tool_use_id=None, human_text=None):
         nonlocal part_index
         if not isinstance(text, str):
             text = flatten_text(text)
@@ -135,6 +136,7 @@ def extract_items(records: List[WireRecord], agent_id: str) -> Extraction:
             preview=text[:200],
             skill_id=skill_id,
             tool_use_id=tool_use_id,
+            human_text=human_text,
         )
         extraction.items.append(item)
         part_index += 1
@@ -192,15 +194,25 @@ def extract_items(records: List[WireRecord], agent_id: str) -> Extraction:
                 text = "\n".join(texts)
                 ref = event.ref or {}
                 signature = skill_signature(text)
+                # TurnBegin items only, and only in the top-level conversation:
+                # a user record can also yield tool_result items (double-counting
+                # one utterance), and elsewhere this same channel carries the
+                # parent agent's Task brief rather than operator keystrokes.
+                human_text = ref.get("human_text")
+                if human_text is not None and agent_id != "main":
+                    human_text = None
+                    extraction.human_text_dropped += 1
                 if ref.get("is_compact_summary"):
                     add(record, "inject", "compact_summary", text,
-                        "qoder:user:compact_summary")
+                        "qoder:user:compact_summary", human_text=human_text)
                 elif signature is not None:
                     add(record, "skill", "skill_body", text,
                         "qoder:signature:skill_body",
-                        skill_id=signature[0], name=signature[1], by_signature=True)
+                        skill_id=signature[0], name=signature[1], by_signature=True,
+                        human_text=human_text)
                 else:
-                    add(record, "user", "user_message", text, "qoder:user")
+                    add(record, "user", "user_message", text, "qoder:user",
+                        human_text=human_text)
             elif event.type == "ToolResult":
                 return_value = event.payload.get("return_value") or {}
                 output = return_value.get("output")

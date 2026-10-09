@@ -96,6 +96,10 @@ class WireRecord:
         return (self.ref or {}).get("response_hash")
 
     @property
+    def human_text(self) -> Optional[str]:
+        return (self.ref or {}).get("human_text")
+
+    @property
     def preview_text(self) -> str:
         for event in self.events:
             if event.type == "ContentPart" and event.payload.get("type") == "text":

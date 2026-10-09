@@ -12,7 +12,7 @@ from typing import Dict, List, Optional, Tuple
 
 from .. import __version__ as ASD_VERSION
 
-IR_VERSION = "1.2"
+IR_VERSION = "1.3"
 
 BUCKETS: Tuple[str, ...] = (
     "system",
@@ -104,6 +104,9 @@ class ContentItem:
     # Phase stamp (IR 1.1): set by the builder when a dispatch's tier A/B
     # recognition assigns one phase; null means no attribution (never guessed).
     phase_id: Optional[str] = None
+    # Typed text (IR 1.3): the log's own humanInput.text — not the harness
+    # expansion that preview/size_chars measure and token attribution counts.
+    human_text: Optional[str] = None
 
 
 @dataclass

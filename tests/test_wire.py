@@ -338,13 +338,13 @@ class QoderTranscriptTests(unittest.TestCase):
             "uuid": "u1", "parent_uuid": None, "is_sidechain": False,
             "parent_tool_use_id": None,
             "request_id": None, "request_hash": None, "response_hash": None,
-            "is_compact_summary": False,
+            "is_compact_summary": False, "human_text": None,
         })
         assistant_ref = {
             "uuid": "a1", "parent_uuid": "u1", "is_sidechain": False,
             "parent_tool_use_id": None,
             "request_id": "req-1", "request_hash": "r" * 64, "response_hash": "s" * 64,
-            "is_compact_summary": False,
+            "is_compact_summary": False, "human_text": None,
         }
         for event in events[1:4]:
             self.assertEqual(event.ref, assistant_ref)
