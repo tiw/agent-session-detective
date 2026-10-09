@@ -1663,7 +1663,7 @@ git commit -m "feat: add --tree-out to the CLI (IR 1.2)"
 
 The demo session `f1c47018` is the Qoder transcript used to calibrate the spec: 3 agents (main with 25 requests, two subagents), 2 dispatches, 3 skill loads, 1 identity merge.
 
-- [ ] **Step 1: Generate the page for the demo session**
+- [x] **Step 1: Generate the page for the demo session**
 
 Run from the repo root:
 
@@ -1675,7 +1675,7 @@ cd /Users/wangting/work/agent-session-detective && PYTHONPATH=src python3 -m age
 
 Expected: exit code 0; stdout prints both `/tmp/asd-tree-demo-report.html` and `/tmp/asd-tree-demo.html`.
 
-- [ ] **Step 2: Verify the page content**
+- [x] **Step 2: Verify the page content**
 
 ```bash
 for needle in \
@@ -1704,7 +1704,7 @@ done
 
 Expected: every line prints a count ≥ 1.
 
-- [ ] **Step 3: Verify the honest-empty child and self-containment**
+- [x] **Step 3: Verify the honest-empty child and self-containment**
 
 ```bash
 grep -cF "no skill loads, no executions" /tmp/asd-tree-demo.html
@@ -1713,7 +1713,7 @@ grep -cF "<script" /tmp/asd-tree-demo.html
 
 Expected: `1` (the second subagent node is honest-empty) and `0` (the page stays script-free).
 
-- [ ] **Step 4: Confirm the workspace is clean**
+- [x] **Step 4: Confirm the workspace is clean**
 
 ```bash
 cd /Users/wangting/work/agent-session-detective && git status --short
