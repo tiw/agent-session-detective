@@ -18,7 +18,8 @@ from agent_session_detective.wire import load_session
 FIXTURES = Path(__file__).parent / "fixtures" / "ir"
 ALL_FIXTURES = ["tier1.jsonl", "tier2.jsonl", "tier3.jsonl",
                 "tier3-usage.jsonl", "compaction.jsonl",
-                "reinject.jsonl", "attachments.jsonl", "dispatch.jsonl"]
+                "reinject.jsonl", "attachments.jsonl", "dispatch.jsonl",
+                "skill-identity.jsonl"]
 
 ZERO_BUCKETS = dict.fromkeys(BUCKETS, 0)
 

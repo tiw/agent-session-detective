@@ -59,6 +59,7 @@ def build_coverage(
     skill_load_evidence: Optional[dict] = None,
     dispatch_links: Optional[dict] = None,
     phase_recognition: Optional[dict] = None,
+    skill_identity: Optional[dict] = None,
 ) -> CoverageReport:
     anchored = sum(1 for call in calls if call.input.anchor_tokens is not None)
     tier_counts = {1: 0, 2: 0, 3: 0}
@@ -92,4 +93,5 @@ def build_coverage(
         skill_load_evidence=skill_load_evidence or {},
         dispatch_links=dispatch_links or {},
         phase_recognition=phase_recognition or {},
+        skill_identity=skill_identity or {},
     )

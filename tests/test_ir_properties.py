@@ -14,7 +14,7 @@ FIXTURES = Path(__file__).parent / "fixtures" / "ir"
 ALL_FIXTURES = ["tier1.jsonl", "tier2.jsonl", "tier3.jsonl",
                 "tier3-usage.jsonl", "compaction.jsonl",
                 "reinject.jsonl", "attachments.jsonl", "calibration.jsonl",
-                "dispatch.jsonl"]
+                "dispatch.jsonl", "skill-identity.jsonl"]
 
 
 def build(name):
@@ -128,6 +128,7 @@ class CoverageLedgerTest(unittest.TestCase):
         "calibration.jsonl": (1, 0, 0),
         # main + three tier-1 subagent transcripts, each grouped by anchor
         "dispatch.jsonl": (4, 0, 0),
+        "skill-identity.jsonl": (1, 0, 0),
     }
     CHECKED_CALLS = {
         "tier1.jsonl": 3,
@@ -140,6 +141,7 @@ class CoverageLedgerTest(unittest.TestCase):
         "calibration.jsonl": 2,
         # three main spans + one span per subagent transcript
         "dispatch.jsonl": 6,
+        "skill-identity.jsonl": 6,
     }
 
     def test_coverage_reconciles_with_the_document_ledger(self):
@@ -193,6 +195,7 @@ class EvidencePropertiesTest(unittest.TestCase):
         for name in ALL_FIXTURES:
             document = build(name)
             items_by_id = {item.item_id: item for item in document.items}
+            skills_by_id = {skill.skill_id: skill for skill in document.skills}
             agent_ids = {agent.agent_id for agent in document.agents}
             for row in document.skill_loads:
                 self.assertIn(row.agent_id, agent_ids, name)
@@ -207,8 +210,17 @@ class EvidencePropertiesTest(unittest.TestCase):
                     self.assertIsNone(row.body_sha1, name)
                 else:
                     body = items_by_id[row.body_item_id]
-                    self.assertEqual(body.kind, "skill_body", name)
-                    self.assertEqual(row.skill_id, body.skill_id, name)
+                    expected_kind = (
+                        "tool_result" if row.channel == "tool:read"
+                        else "skill_body"
+                    )
+                    self.assertEqual(body.kind, expected_kind, name)
+                    if body.skill_id != row.skill_id:
+                        self.assertIn(
+                            body.skill_id,
+                            skills_by_id[row.skill_id].aliases,
+                            name,
+                        )
                     self.assertEqual(
                         row.cost_tokens_est, body.tokens_est, name
                     )

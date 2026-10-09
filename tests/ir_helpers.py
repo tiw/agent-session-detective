@@ -60,6 +60,12 @@ def assert_adapter_contract(test, document):
     test.assertEqual(len(calls_by_id), len(document.requests))
     agent_ids = {agent.agent_id for agent in document.agents}
     skill_ids = {skill.skill_id for skill in document.skills}
+    raw_skill_ids = {
+        observation.raw_skill_id
+        for skill in document.skills
+        for observation in skill.observations
+        if observation.raw_skill_id is not None
+    }
 
     for call in document.requests:
         test.assertIn(call.agent_id, agent_ids)
@@ -103,7 +109,7 @@ def assert_adapter_contract(test, document):
 
     for item in document.items:
         if item.skill_id is not None:
-            test.assertIn(item.skill_id, skill_ids)
+            test.assertIn(item.skill_id, skill_ids | raw_skill_ids)
 
     for skill in document.skills:
         for observation in skill.observations:

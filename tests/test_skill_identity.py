@@ -2,9 +2,14 @@
 
 import copy
 import unittest
+from pathlib import Path
 
+from agent_session_detective.ir.builder import build_audit_document
 from agent_session_detective.ir.schema import Observation, SkillEntity
 from agent_session_detective.ir.skills import merge_skill_identities
+from agent_session_detective.wire import load_session
+
+FIXTURES = Path(__file__).parent / "fixtures" / "ir"
 
 
 def obs(kind, item_id, *, ts=None, channel="test", tokens=10, agent="main",
@@ -172,6 +177,58 @@ class MergeTests(unittest.TestCase):
 
         self.assertEqual(entities, snapshot)
         self.assertEqual(listing, snapshot_listing)
+
+
+class EndToEndTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.document = build_audit_document(
+            load_session(FIXTURES / "skill-identity.jsonl"), "qoder")
+
+    def entities(self):
+        return {entity.skill_id: entity for entity in self.document.skills}
+
+    def test_entities_carry_the_merge_and_the_ambiguity(self):
+        self.assertEqual(
+            [e.skill_id for e in self.document.skills],
+            ["a:dup", "b:dup", "dup", "ns:demo", "pptx",
+             "presentations:pptx"],
+        )
+        demo = self.entities()["ns:demo"]
+        self.assertEqual(demo.name, "demo")
+        self.assertEqual(demo.aliases, ["demo"])
+        self.assertEqual([o.kind for o in demo.observations],
+                         ["execution", "stub", "body"])
+        absorbed = [o for o in demo.observations
+                    if o.raw_skill_id is not None]
+        self.assertEqual(len(absorbed), 1)
+        self.assertEqual(absorbed[0].raw_skill_id, "demo")
+        self.assertEqual(absorbed[0].channel, "tool:read")
+
+    def test_coverage_counts_merges_and_ambiguities(self):
+        identity = self.document.coverage.skill_identity
+        self.assertEqual(identity["merges"], 1)
+        self.assertEqual(identity["aliases"], {"ns:demo": ["demo"]})
+        self.assertEqual(identity["ambiguous"], ["dup"])
+
+    def test_loads_join_reads_to_stubs_and_keep_unattached_stubs_unavailable(self):
+        loads = self.document.skill_loads
+        self.assertEqual([row.skill_id for row in loads],
+                         ["ns:demo", "a:dup", "b:dup", "dup"])
+        first = loads[0]
+        self.assertEqual(first.kind, "load")
+        self.assertEqual(first.channel, "tool:read")
+        self.assertEqual(first.cost_basis, "body")
+        self.assertIsNotNone(first.cost_tokens_est)
+        for row in loads[1:3]:
+            self.assertEqual(row.kind, "load")
+            self.assertEqual(row.cost_basis, "unavailable")
+            self.assertIsNone(row.cost_tokens_est)
+            self.assertIsNone(row.channel)
+        last = loads[3]
+        self.assertEqual(last.skill_id, "dup")
+        self.assertEqual(last.channel, "tool:read")
+        self.assertEqual(last.cost_basis, "body")
 
 
 if __name__ == "__main__":

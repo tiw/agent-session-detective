@@ -47,7 +47,7 @@ from .schema import (
     RequestOutput,
     Span,
 )
-from .skills import build_skills
+from .skills import build_skills, merge_skill_identities
 from .spans import (
     RequestSpan,
     anchor_runs,
@@ -308,6 +308,14 @@ def build_audit_document(session: Session, adapter_id: str) -> AuditDocument:
     skills = build_skills(
         extraction.items, all_calls, seq_ts, extraction.listing_lines
     )
+    listing_skill_ids = {
+        skill_id
+        for lines in extraction.listing_lines.values()
+        for skill_id, _display, _tokens in lines
+    }
+    skills, skill_identity = merge_skill_identities(
+        skills, listing_skill_ids
+    )
     skill_loads, redundant_bodies = build_loads(
         skills, extraction.items, agents
     )
@@ -343,6 +351,7 @@ def build_audit_document(session: Session, adapter_id: str) -> AuditDocument:
         skill_load_evidence=skill_load_evidence,
         dispatch_links=dispatch_links,
         phase_recognition=phase_recognition,
+        skill_identity=skill_identity,
     )
     return AuditDocument(
         adapter={"id": adapter_id, "version": ADAPTER_VERSION},
