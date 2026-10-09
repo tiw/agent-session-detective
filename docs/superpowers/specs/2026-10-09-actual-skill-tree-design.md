@@ -187,14 +187,14 @@ New module; `build_analyses(document)` gains a 6th key `"skill_tree"`.
   "nodes": [
     { "agent_id", "label", "model", "context_window", "n_requests",
       "parent_agent_id", "via_dispatch_id",
-      "attachments": [ {skill_id, name, executed, loads: [...],
+      "attachments": [ {skill_id, name, aliases, executed, loads: [...],
                         loads_tokens_est, channels: [...], sha1s: [...]} ],
-      "ambient": { "entities": n, "injections": n, "tokens_est": n } }
+      "ambient": { "skills": n, "injections": n, "tokens_est": n } }
   ],
   "edges": [
     { "dispatch_id", "from_agent_id", "to_agent_id", "subagent_type",
       "description", "brief_tokens_est", "phase_id" } ],
-  "loose": [ {agent_id, reason} ],
+  "loose": [ {agent_id, label, reason} ],
   "totals": { "agents", "edges", "loads", "reloads", "unavailable",
               "executions", "ambient_tokens_est", "attached_tokens_est" }
 }
@@ -213,8 +213,8 @@ never dropped.
 **in that agent** (any of: `body`, `stub`, `execution`). Per skill:
 executed flag (`execution` observation present in that agent), the
 node's `LoadEvidence` rows for that skill (from `document.skill_loads`,
-`load.agent_id == node.agent_id`), summed `tokens_est` over non-null
-loads, channel set, body sha1 list. A skill that appears in the node
+`load.agent_id == node.agent_id`), summed `tokens_est` over body-basis
+rows (`cost_basis == "body"`), channel set, body sha1 list. A skill that appears in the node
 only through `skill_listing` observations is **not** an attachment —
 listings are ambient, per skill never per-listing rows.
 
@@ -235,8 +235,10 @@ dispatches work by construction (`parent_agent_id` may itself be a
 subagent).
 
 **Totals** — re-derived from the rows above; `attached_tokens_est`
-sums only non-null load costs (EST), `unavailable` counts null-cost
-rows. The analysis never reads transcript text, only the document.
+sums `cost_basis == "body"` rows across the whole ledger (a hand-built
+document whose rows name an agent absent from `document.agents` counts
+in the total, not under any node), `unavailable` counts null-cost rows.
+The analysis never reads transcript text, only the document.
 
 ## D3 — The tree renderer (`tree_html.py`)
 
@@ -260,7 +262,7 @@ Layout, top to bottom:
    context window. Under each node: **attachments** table (skill,
    executed?, loads with per-load kind/ts/channel/cost, `unavailable`
    for null-cost rows, summed EST), and an **ambient** line when
-   `entities > 0` ("preloaded: N skills, M injections, ~T EST").
+   `skills > 0` ("preloaded: N skills, M injections, ~T EST").
    Edges render as the child block itself, with the dispatch line
    above it: brief EST, subagent_type, description when present; orphan
    dispatches render as a `warn` note under the parent; `loose` agents
