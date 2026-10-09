@@ -135,6 +135,18 @@ class MergeTests(unittest.TestCase):
         self.assertEqual(report["merges"], 0)
         self.assertEqual(report["ambiguous"], [])
 
+    def test_colon_bearing_ids_are_never_merge_sources(self):
+        target = entity("x:ns:demo", "x:ns:demo",
+                        [obs("stub", "main:1:0", ts=10.0)])
+        bare = entity("ns:demo", "ns:demo",
+                      [obs("body", "main:2:0", ts=11.0)])
+
+        merged, report = merge_skill_identities([target, bare], set())
+
+        self.assertEqual([e.skill_id for e in merged],
+                         ["x:ns:demo", "ns:demo"])
+        self.assertEqual(report["merges"], 0)
+
     def test_null_ts_observations_sort_last(self):
         target = entity("ns:s", "ns:s", [])
         bare = entity("s", "s", [
