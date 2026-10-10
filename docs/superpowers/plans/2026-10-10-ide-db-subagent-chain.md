@@ -23,7 +23,7 @@
 
 1. **IR 1.6 → 1.7** (spec says "bump the IR version"; it did not pin the number in the visible text — this plan pins it at 1.7). Only two schema-visible deltas when the flag is off: the version string and one new empty coverage block `"ide_db": {}`.
 2. **Verified live** against session `b1d65022-…` before planning: 9 children (all `session_type='agent_sub_custom'`), 415 rows, `token_info` plaintext on 164/164 assistant rows, `gmt_create` is integer ms epoch, `id` order differs from `gmt_create` order on 9/9 children — hence the SQL orders by `(gmt_create, id)`.
-3. **Row shapes** (probe-verified): user rows carry `contents` (list of `{"type": "text", "text": …}`); assistant rows carry `content` (str) + `reasoning_content` (str) + `tool_calls` (list of `{"id", "type", "function": {"name", "arguments"}}` — `arguments` is a JSON **string**, kept verbatim); tool rows carry `content` (str) + `name` + `tool_call_id`, and **no** `is_error` key (default `False`).
+3. **Row shapes** (probe-verified): user rows carry `contents` (list of `{"type": "text", "text": …}`) — but position-0 brief rows can instead carry plaintext `content` (str) with no `contents` key, and the synthesizer falls back to it (parity with the disk parser, `wire.py:551-553`); assistant rows carry `content` (str) + `reasoning_content` (str) + `tool_calls` (list of `{"id", "type", "function": {"name", "arguments"}}` — `arguments` is a JSON **string**, kept verbatim); tool rows carry `content` (str) + `name` + `tool_call_id`, and **no** `is_error` key (default `False`).
 4. **Attach point** (locked): `attach_ide_db(session, source, db)` mutates `session.events` and is called after `load_session`, **before** `build_audit_document` — the builder reads events, so anything attached after the build is invisible.
 5. **`cli.py` import slot**: `from .ide_db import attach_ide_db` goes between `from .catalog import …` and `from .if_eval import …` (alphabetical: catalog < ide_db < if_eval).
 6. **UsageRecord placement**: `_synthesize_child` emits UsageRecord for assistant rows **after** the role if/elif chain, and it is emitted even when the row is undecryptable (the `token_info` column is plaintext — we never lose usable usage data to a decrypt failure). Order per assistant row: text part → think part → ToolCall(s) → UsageRecord.
@@ -237,6 +237,20 @@ class DecryptLadderTests(unittest.TestCase):
         raw = coded(PLAINTEXT_ASSISTANT)
         self.assertIsNone(ide_db._decrypt_row(raw, boom))
 
+    def test_decryptor_raising_oserror_decrypts_to_none(self):
+        def boom(blob):
+            raise FileNotFoundError("openssl vanished")
+
+        raw = coded(PLAINTEXT_ASSISTANT)
+        self.assertIsNone(ide_db._decrypt_row(raw, boom))
+
+    def test_decryptor_raising_import_error_decrypts_to_none(self):
+        def boom(blob):
+            raise ImportError("broken cryptography install")
+
+        raw = coded(PLAINTEXT_ASSISTANT)
+        self.assertIsNone(ide_db._decrypt_row(raw, boom))
+
     def test_real_ciphertext_decrypts_with_the_resolved_backend(self):
         decrypt = ide_db._resolve_decryptor()
         if decrypt is None:
@@ -325,7 +339,8 @@ def _openssl_decrypt(blob):
 
 def _resolve_decryptor():
     try:
-        import cryptography  # noqa: F401
+        from cryptography.hazmat.primitives.ciphers import (  # noqa: F401
+            Cipher, algorithms, modes)
     except ImportError:
         pass
     else:
@@ -344,7 +359,7 @@ def _decrypt_row(raw, decrypt):
         if isinstance(data, bytes):
             data = data.decode("utf-8")
         payload = json.loads(data)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OSError, ImportError):
         return None
     return payload if isinstance(payload, dict) else None
 
@@ -439,6 +454,18 @@ class SynthesizeChildTests(unittest.TestCase):
         self.assertEqual(events[0].payload["user_input"],
                          [{"type": "text", "text": "do the thing"}])
 
+    def test_user_row_with_plaintext_content_falls_back(self):
+        decoded = {"role": "user", "content": "brief without contents"}
+        rows = [(1, "user", coded(decoded), "req-2", None, 1754709632658)]
+        events, failures = ide_db._synthesize_child(
+            KID_UUID, "call_00A", rows, identity_decryptor,
+            Path("/tmp/ide-db.jsonl"))
+        self.assertEqual(failures, 0)
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0].type, "TurnBegin")
+        self.assertEqual(events[0].payload["user_input"],
+                         [{"type": "text", "text": "brief without contents"}])
+
     def test_user_row_with_no_text_parts_emits_nothing(self):
         decoded = {"role": "user", "contents": [{"type": "image", "data": "x"}]}
         rows = [(1, "user", coded(decoded), "req-2", None, 1754709632658)]
@@ -521,6 +548,10 @@ def _synthesize_child(child_id, parent_tool_call_id, rows, decrypt, source):
                 failures += 1
         elif role == "user":
             parts = _text_parts(decoded)
+            if not parts:
+                text = decoded.get("content")
+                if isinstance(text, str) and text:
+                    parts = [{"type": "text", "text": text}]
             if parts:
                 emit(seq, ts, ref, "TurnBegin", {"user_input": parts})
         elif role == "assistant":
