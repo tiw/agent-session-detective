@@ -82,10 +82,12 @@ session_meta，直接以 assistant 记录开头。
   progress 为 0 条。
 - session_meta 的 `data`(CLI) vs `payload`(codex) 区分两种 session_meta 头。
 
-ASD wire 层已按此实现 `_detect_format` 的多记录扫描 + `load_session` 对
-qoder-cli 显式拒绝（ValueError）；web 发现层 codex glob 已收紧为
-`rollout-*` 前缀（旧 `*/*/*/*.jsonl` 会把 qoder 根下 247 个 subagent 文件
-误标成 codex 会话）。
+ASD wire 层已按此实现 `_detect_format` 的多记录扫描；`load_session` 对
+qoder-cli 不做拒绝，而是降级加载 —— `source_format="qoder-cli"`、
+`compaction_telemetry_available=False`，对话与工具调用照常重建，页面/树
+视图渲染「no usage telemetry」提示（token 成本不可用）；web 发现层 codex
+glob 已收紧为 `rollout-*` 前缀（旧 `*/*/*/*.jsonl` 会把 qoder 根下 247 个
+subagent 文件误标成 codex 会话）。
 
 ## 富格式逐记录形状
 
