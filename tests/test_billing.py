@@ -205,15 +205,15 @@ class AttachTest(unittest.TestCase):
                              ["billed_usage: unavailable (not a qoder session)"])
 
 
-def make_series_db(path: Path, rows) -> Path:
+def make_series_db(path: Path, rows, session: str = UUID) -> Path:
     """3-column chat_message (IR 1.5+): gmt_create is INTEGER epoch ms."""
     conn = sqlite3.connect(path)
     conn.execute(
-        "CREATE TABLE chat_message "
+        "CREATE TABLE IF NOT EXISTS chat_message "
         "(session_id TEXT, gmt_create INTEGER, token_info TEXT)")
     for gmt, info in rows:
         conn.execute("INSERT INTO chat_message VALUES (?, ?, ?)",
-                     (UUID, gmt, None if info is None else json.dumps(info)))
+                     (session, gmt, None if info is None else json.dumps(info)))
     conn.commit()
     conn.close()
     return path
@@ -222,19 +222,26 @@ def make_series_db(path: Path, rows) -> Path:
 class QueryBilledSeriesTest(unittest.TestCase):
     def test_series_rows_are_ts_sorted_in_seconds(self):
         # gmt_create is INTEGER epoch milliseconds; a value below 1e11 is
-        # already seconds. Rows come back time-sorted with float seconds.
+        # already seconds. Rows come back time-sorted with float seconds,
+        # and only the requested session's rows are returned.
         with tempfile.TemporaryDirectory() as directory:
             db = make_series_db(Path(directory) / "local.db", [
                 (1754709642658, {"prompt_tokens": 50000, "completion_tokens": 40,
                                  "cached_tokens": 0}),
                 (1754709632658, {"prompt_tokens": 100000, "completion_tokens": 40,
                                  "cached_tokens": 80000}),
+                (1754709632, {"prompt_tokens": 90000, "completion_tokens": 40,
+                              "cached_tokens": 70000}),
             ])
+            make_series_db(db, [
+                (1754709632658, {"prompt_tokens": 777777, "completion_tokens": 1,
+                                 "cached_tokens": 0}),
+            ], session="other-session")
             rows = query_billed_series(UUID, db_path=db)
             self.assertEqual([r["ts"] for r in rows],
-                             [1754709632.658, 1754709642.658])
-            self.assertEqual(rows[0]["prompt"], 100000)
-            self.assertEqual(rows[0]["cached"], 80000)
+                             [1754709632.0, 1754709632.658, 1754709642.658])
+            self.assertEqual(rows[0]["prompt"], 90000)
+            self.assertEqual(rows[0]["cached"], 70000)
 
     def test_malformed_rows_are_skipped_whole(self):
         with tempfile.TemporaryDirectory() as directory:

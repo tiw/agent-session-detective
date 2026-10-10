@@ -9,6 +9,7 @@ uuid.
 """
 
 import json
+import math
 import re
 import sqlite3
 from dataclasses import dataclass
@@ -48,7 +49,7 @@ def _gmt_create_to_ts(value) -> Optional[float]:
         n = float(value)
     except (TypeError, ValueError):
         return None
-    if n <= 0:
+    if not (n > 0 and math.isfinite(n)):
         return None
     # chat_message.gmt_create is INTEGER epoch milliseconds; a value below
     # 1e11 is already seconds.
@@ -81,11 +82,11 @@ def query_billed_series(session_uuid: str, db_path=None) -> List[dict]:
                 try:
                     info = json.loads(raw)
                     if not isinstance(info, dict):
-                        raise ValueError("token_info is not an object")
+                        continue
                     rows.append({"ts": ts,
-                                 "prompt": int(info.get("prompt_tokens") or 0),
-                                 "completion": int(info.get("completion_tokens") or 0),
-                                 "cached": int(info.get("cached_tokens") or 0)})
+                                 "prompt": int(info["prompt_tokens"]),
+                                 "completion": int(info["completion_tokens"]),
+                                 "cached": int(info["cached_tokens"])})
                 except (TypeError, ValueError, KeyError):
                     continue
     except sqlite3.Error as exc:
