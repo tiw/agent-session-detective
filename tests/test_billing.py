@@ -9,6 +9,7 @@ from pathlib import Path
 from agent_session_detective.billing import (
     BillingUnavailable,
     attach_billed_usage,
+    query_billed_series,
     query_billed_usage,
     session_uuid_from_source,
 )
@@ -202,6 +203,62 @@ class AttachTest(unittest.TestCase):
             self.assertIsNone(document.billing)
             self.assertEqual(document.coverage.notes,
                              ["billed_usage: unavailable (not a qoder session)"])
+
+
+def make_series_db(path: Path, rows) -> Path:
+    """3-column chat_message (IR 1.5+): gmt_create is INTEGER epoch ms."""
+    conn = sqlite3.connect(path)
+    conn.execute(
+        "CREATE TABLE chat_message "
+        "(session_id TEXT, gmt_create INTEGER, token_info TEXT)")
+    for gmt, info in rows:
+        conn.execute("INSERT INTO chat_message VALUES (?, ?, ?)",
+                     (UUID, gmt, None if info is None else json.dumps(info)))
+    conn.commit()
+    conn.close()
+    return path
+
+
+class QueryBilledSeriesTest(unittest.TestCase):
+    def test_series_rows_are_ts_sorted_in_seconds(self):
+        # gmt_create is INTEGER epoch milliseconds; a value below 1e11 is
+        # already seconds. Rows come back time-sorted with float seconds.
+        with tempfile.TemporaryDirectory() as directory:
+            db = make_series_db(Path(directory) / "local.db", [
+                (1754709642658, {"prompt_tokens": 50000, "completion_tokens": 40,
+                                 "cached_tokens": 0}),
+                (1754709632658, {"prompt_tokens": 100000, "completion_tokens": 40,
+                                 "cached_tokens": 80000}),
+            ])
+            rows = query_billed_series(UUID, db_path=db)
+            self.assertEqual([r["ts"] for r in rows],
+                             [1754709632.658, 1754709642.658])
+            self.assertEqual(rows[0]["prompt"], 100000)
+            self.assertEqual(rows[0]["cached"], 80000)
+
+    def test_malformed_rows_are_skipped_whole(self):
+        with tempfile.TemporaryDirectory() as directory:
+            db = make_series_db(Path(directory) / "local.db", [
+                (0, {"prompt_tokens": 1}),
+                (1754709632658, None),
+                (1754709642658, {"prompt_tokens": "x"}),
+                (1754709652658, {"prompt_tokens": 20000, "completion_tokens": 5,
+                                 "cached_tokens": 0}),
+            ])
+            rows = query_billed_series(UUID, db_path=db)
+            self.assertEqual([r["ts"] for r in rows], [1754709652.658])
+
+    def test_missing_db_raises_billing_unavailable(self):
+        with self.assertRaises(BillingUnavailable):
+            query_billed_series(UUID, db_path=Path("/nonexistent/asd-test.db"))
+
+    def test_zero_parseable_rows_raises(self):
+        with tempfile.TemporaryDirectory() as directory:
+            db = make_series_db(Path(directory) / "local.db", [
+                (1754709632658, {"prompt_tokens": "x"}),
+            ])
+            with self.assertRaises(BillingUnavailable):
+                query_billed_series(UUID, db_path=db)
 
 
 if __name__ == "__main__":

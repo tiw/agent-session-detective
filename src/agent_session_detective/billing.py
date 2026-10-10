@@ -13,7 +13,7 @@ import re
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
 from .ir.schema import AuditDocument, BilledUsage
 
@@ -41,6 +41,61 @@ def session_uuid_from_source(source_path: Path) -> Optional[str]:
         return None
     stem = source_path.stem
     return stem.lower() if _UUID_RE.match(stem) else None
+
+
+def _gmt_create_to_ts(value) -> Optional[float]:
+    try:
+        n = float(value)
+    except (TypeError, ValueError):
+        return None
+    if n <= 0:
+        return None
+    # chat_message.gmt_create is INTEGER epoch milliseconds; a value below
+    # 1e11 is already seconds.
+    return n if n < 1e11 else n / 1000.0
+
+
+def query_billed_series(session_uuid: str, db_path=None) -> List[dict]:
+    """Billed token rows for one session, time-sorted:
+    [{ts, prompt, completion, cached}, ...]."""
+    path = Path(db_path or DEFAULT_DB_PATH)
+    if not path.is_file():
+        raise BillingUnavailable("db not found: %s" % path)
+    try:
+        conn = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)
+    except sqlite3.Error as exc:
+        raise BillingUnavailable(str(exc)) from exc
+    rows: List[dict] = []
+    try:
+        cursor = conn.execute(
+            "SELECT gmt_create, token_info FROM chat_message "
+            "WHERE session_id = ? ORDER BY gmt_create", (session_uuid,))
+        while True:
+            batch = cursor.fetchmany(200)
+            if not batch:
+                break
+            for gmt, raw in batch:
+                ts = _gmt_create_to_ts(gmt)
+                if ts is None:
+                    continue
+                try:
+                    info = json.loads(raw)
+                    if not isinstance(info, dict):
+                        raise ValueError("token_info is not an object")
+                    rows.append({"ts": ts,
+                                 "prompt": int(info.get("prompt_tokens") or 0),
+                                 "completion": int(info.get("completion_tokens") or 0),
+                                 "cached": int(info.get("cached_tokens") or 0)})
+                except (TypeError, ValueError, KeyError):
+                    continue
+    except sqlite3.Error as exc:
+        raise BillingUnavailable(str(exc)) from exc
+    finally:
+        conn.close()
+    if not rows:
+        raise BillingUnavailable(
+            "no parseable billed rows for session %s" % session_uuid)
+    return rows
 
 
 def query_billed_usage(session_uuid: str, db_path=None) -> BilledUsage:
