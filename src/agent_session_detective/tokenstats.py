@@ -28,6 +28,12 @@ from .wire import Event, Session
 # Tool results smaller than this are not checked for repeat injection.
 MIN_REPEAT_CHARS = 200
 
+# A repeat pair looks like polling when the same tool re-returns similar
+# content within two minutes and each copy is small; large outputs re-read
+# after minutes are not polling.
+REPEAT_POLL_GAP_S = 120
+REPEAT_POLL_MAX_CHARS = 2000
+
 # Harness-authored blocks riding inside a user message. Injection is
 # recognised by content signature, not by the call envelope: the envelope is
 # an ordinary user turn either way, so only the wrapper gives it away.
@@ -99,6 +105,11 @@ class Repeat:
     occurrences: int
     tokens_each: int
     extra_tokens: int  # (occurrences - 1) * tokens_each
+    tool_name: Optional[str] = None
+    chars_each: int = 0
+    occurrence_ts: List[Optional[float]] = field(default_factory=list)
+    occurrence_classes: List[str] = field(default_factory=list)
+    extra_by_class: Dict[str, int] = field(default_factory=dict)
 
 
 @dataclass
@@ -117,6 +128,7 @@ class TokenStats:
     hash_flips: Optional[int] = None
     repeats: List[Repeat] = field(default_factory=list)
     repeat_extra_tokens: int = 0
+    repeat_class_totals: Dict[str, int] = field(default_factory=dict)
 
 
 def _usage_from_events(events: List[Event]) -> List[UsageRecord]:
@@ -410,12 +422,64 @@ def _growth_verdict(rows: List[TurnGrowth]) -> str:
     return "linear (constant per-turn growth)"
 
 
-def _repeats(events: List[Event]) -> Tuple[List[Repeat], int]:
-    """Identical large tool results seen more than once.
+def _tool_names(events: List[Event]) -> Dict[str, str]:
+    names: Dict[str, str] = {}
+    for e in events:
+        if e.type != "ToolCall":
+            continue
+        fn = e.payload.get("function") or {}
+        name = fn.get("name") if isinstance(fn, dict) else None
+        call_id = e.payload.get("id")
+        if call_id is not None and name:
+            names[str(call_id)] = str(name)
+    return names
 
-    Re-injecting the same content across turns is the observable signature
-    of state not being externalized (summaries derived instead of replayed).
-    """
+
+def _classify_occurrences(ts_list: List[Optional[float]],
+                          tools: Dict[int, Optional[str]],
+                          chars_each: int,
+                          windows: List[dict]) -> List[str]:
+    classes = ["first"]
+    has_source = bool(windows)
+    for i in range(1, len(ts_list)):
+        prev_ts, cur_ts = ts_list[i - 1], ts_list[i]
+        if prev_ts is None or cur_ts is None:
+            classes.append("unclassified")
+            continue
+        if any(w.get("window_start") is not None
+               and w.get("window_end") is not None
+               and w["window_start"] < cur_ts and w["window_end"] > prev_ts
+               for w in windows):
+            classes.append("post_compaction")
+            continue
+        if (chars_each < REPEAT_POLL_MAX_CHARS
+                and tools.get(i) is not None
+                and tools.get(i) == tools.get(i - 1)
+                and (cur_ts - prev_ts) <= REPEAT_POLL_GAP_S):
+            classes.append("poll")
+            continue
+        classes.append("no_compaction" if has_source else "unclassified")
+    return classes
+
+
+def _extra_by_class(classes: List[str], tokens_each: int) -> Dict[str, int]:
+    counts: Dict[str, int] = {}
+    for cls in classes[1:]:
+        counts[cls] = counts.get(cls, 0) + tokens_each
+    return counts
+
+
+def _repeats(events: List[Event],
+             compaction_windows: Optional[List[dict]] = None,
+             ) -> Tuple[List[Repeat], int, Dict[str, int]]:
+    """Identical large tool results seen more than once. Each occurrence
+    after the first is classified against compaction windows:
+    post_compaction (legal protocol re-read), poll, no_compaction (the real
+    violation), or unclassified when no evidence source exists. Returns the
+    top-10 repeats, the extra-token total over ALL groups, and per-class
+    totals over ALL groups, so class totals add up against the headline."""
+    windows = compaction_windows or []
+    tools_by_id = _tool_names(events)
     groups: Dict[str, dict] = {}
     for e in events:
         if e.type != "ToolResult":
@@ -426,21 +490,35 @@ def _repeats(events: List[Event]) -> Tuple[List[Repeat], int]:
         key = hashlib.sha1(out.encode("utf-8", "replace")).hexdigest()
         g = groups.setdefault(
             key,
-            {"preview": out[:160], "occurrences": 0, "tokens": estimate_tokens(out)},
+            {"preview": out[:160], "occurrences": 0,
+             "tokens": estimate_tokens(out), "chars": len(out),
+             "ts": [], "tools": []},
         )
         g["occurrences"] += 1
-    repeats = [
-        Repeat(
-            preview=g["preview"],
-            occurrences=g["occurrences"],
-            tokens_each=g["tokens"],
-            extra_tokens=(g["occurrences"] - 1) * g["tokens"],
-        )
-        for g in groups.values()
-        if g["occurrences"] > 1
-    ]
+        g["ts"].append(e.ts)
+        g["tools"].append(tools_by_id.get(str(e.payload.get("tool_call_id"))))
+    repeats: List[Repeat] = []
+    total = 0
+    class_totals: Dict[str, int] = {}
+    for g in groups.values():
+        if g["occurrences"] <= 1:
+            continue
+        classes = _classify_occurrences(g["ts"],
+                                        dict(enumerate(g["tools"])),
+                                        g["chars"], windows)
+        per_class = _extra_by_class(classes, g["tokens"])
+        for cls, extra in per_class.items():
+            class_totals[cls] = class_totals.get(cls, 0) + extra
+        extra = sum(per_class.values())
+        total += extra
+        repeats.append(Repeat(
+            preview=g["preview"], occurrences=g["occurrences"],
+            tokens_each=g["tokens"], extra_tokens=extra,
+            tool_name=(g["tools"][0] if len(set(g["tools"])) == 1 else None),
+            chars_each=g["chars"], occurrence_ts=list(g["ts"]),
+            occurrence_classes=classes, extra_by_class=per_class))
     repeats.sort(key=lambda r: -r.extra_tokens)
-    return repeats[:10], sum(r.extra_tokens for r in repeats)
+    return repeats[:10], total, class_totals
 
 
 def build_token_stats(session: Session, timeline: Timeline) -> TokenStats:
@@ -460,7 +538,8 @@ def build_token_stats(session: Session, timeline: Timeline) -> TokenStats:
         if _has_context_measurement(session)
         else "unavailable (no context telemetry)"
     )
-    stats.repeats, stats.repeat_extra_tokens = _repeats(session.events)
+    stats.repeats, stats.repeat_extra_tokens, stats.repeat_class_totals = \
+        _repeats(session.events)
 
     totals = {k: 0 for k in BUCKET_KEYS}
     for r in stats.turn_growth:

@@ -1,0 +1,176 @@
+"""Repeat-injection classification: per-occurrence classes and totals."""
+
+import unittest
+from pathlib import Path
+
+from agent_session_detective.tokenstats import (
+    _classify_occurrences,
+    _extra_by_class,
+    _repeats,
+)
+from agent_session_detective.wire import Event
+
+BIG = "x" * 300  # estimate_tokens -> 75 (ASCII, 4 chars per token)
+SESSION = Path("/tmp/asd-test.jsonl")
+
+
+def tool_call(call_id, name, ts, seq):
+    return Event(ts=ts, type="ToolCall", origin="main", source=SESSION, seq=seq,
+                 payload={"id": call_id,
+                          "function": {"name": name, "arguments": "{}"}})
+
+
+def tool_result(call_id, output, ts, seq):
+    return Event(ts=ts, type="ToolResult", origin="main", source=SESSION, seq=seq,
+                 payload={"tool_call_id": call_id,
+                          "return_value": {"output": output}})
+
+
+def poll_pair_events():
+    return [tool_call("c1", "Read", 10.0, 1), tool_result("c1", BIG, 10.0, 2),
+            tool_call("c2", "Read", 40.0, 3), tool_result("c2", BIG, 40.0, 4)]
+
+
+class ClassifyOccurrencesTest(unittest.TestCase):
+    WINDOWS = [{"window_start": 5.0, "window_end": 50.0}]
+
+    def test_first_occurrence_is_never_classified(self):
+        self.assertEqual(
+            _classify_occurrences([10.0], {0: "Read"}, 300, self.WINDOWS),
+            ["first"])
+
+    def test_without_windows_late_pairs_are_unclassified(self):
+        classes = _classify_occurrences([10.0, 900.0], {0: "Read", 1: "Grep"},
+                                        300, [])
+        self.assertEqual(classes, ["first", "unclassified"])
+
+    def test_window_overlap_is_post_compaction(self):
+        classes = _classify_occurrences([10.0, 20.0], {0: "Read", 1: "Read"},
+                                        300, self.WINDOWS)
+        self.assertEqual(classes, ["first", "post_compaction"])
+
+    def test_occurrence_at_window_end_still_overlaps(self):
+        classes = _classify_occurrences([10.0, 50.0], {0: "Read", 1: "Read"},
+                                        300, self.WINDOWS)
+        self.assertEqual(classes, ["first", "post_compaction"])
+
+    def test_missing_timestamps_are_unclassified(self):
+        classes = _classify_occurrences([10.0, None], {0: "Read", 1: "Read"},
+                                        300, self.WINDOWS)
+        self.assertEqual(classes, ["first", "unclassified"])
+
+    def test_compaction_wins_over_poll(self):
+        # Same tool, 30s gap, small output: a poll signature — but the pair
+        # sits inside a compaction window, and post_compaction wins.
+        classes = _classify_occurrences([10.0, 40.0], {0: "Read", 1: "Read"},
+                                        300, self.WINDOWS)
+        self.assertEqual(classes, ["first", "post_compaction"])
+
+    def test_poll_signature(self):
+        classes = _classify_occurrences([10.0, 40.0], {0: "Read", 1: "Read"},
+                                        300, [])
+        self.assertEqual(classes, ["first", "poll"])
+
+    def test_gap_exactly_120s_is_poll(self):
+        classes = _classify_occurrences([10.0, 130.0], {0: "Read", 1: "Read"},
+                                        300, [])
+        self.assertEqual(classes, ["first", "poll"])
+
+    def test_gap_200s_is_not_poll(self):
+        classes = _classify_occurrences([10.0, 210.0], {0: "Read", 1: "Read"},
+                                        300, [])
+        self.assertEqual(classes, ["first", "unclassified"])
+
+    def test_chars_2000_is_not_poll(self):
+        classes = _classify_occurrences([10.0, 40.0], {0: "Read", 1: "Read"},
+                                        2000, [])
+        self.assertEqual(classes, ["first", "unclassified"])
+
+    def test_different_tools_is_not_poll(self):
+        classes = _classify_occurrences([10.0, 40.0], {0: "Read", 1: "Grep"},
+                                        300, [])
+        self.assertEqual(classes, ["first", "unclassified"])
+
+    def test_no_compaction_requires_a_source(self):
+        # With an evidence source present but no overlapping window, a late
+        # large pair is the genuine violation signal: no_compaction.
+        classes = _classify_occurrences([10.0, 900.0], {0: "Read", 1: "Read"},
+                                        300,
+                                        [{"window_start": 1000.0,
+                                          "window_end": 1001.0}])
+        self.assertEqual(classes, ["first", "no_compaction"])
+
+
+class ExtraByClassTest(unittest.TestCase):
+    def test_first_never_contributes(self):
+        counts = _extra_by_class(
+            ["first", "post_compaction", "poll", "post_compaction"], 100)
+        self.assertEqual(counts, {"post_compaction": 200, "poll": 100})
+
+
+class RepeatsTest(unittest.TestCase):
+    def test_single_occurrence_is_ignored(self):
+        self.assertEqual(_repeats(poll_pair_events()[:2]), ([], 0, {}))
+
+    def test_small_outputs_are_ignored(self):
+        events = [tool_call("c1", "Read", 10.0, 1),
+                  tool_result("c1", "tiny", 10.0, 2),
+                  tool_call("c2", "Read", 40.0, 3),
+                  tool_result("c2", "tiny", 40.0, 4)]
+        self.assertEqual(_repeats(events), ([], 0, {}))
+
+    def test_without_windows_repeats_are_unclassified(self):
+        events = [tool_call("c1", "Read", 10.0, 1),
+                  tool_result("c1", BIG, 10.0, 2),
+                  tool_call("c2", "Grep", 900.0, 3),
+                  tool_result("c2", BIG, 900.0, 4)]
+        repeats, total, class_totals = _repeats(events)
+        self.assertEqual(repeats[0].occurrence_classes,
+                         ["first", "unclassified"])
+        self.assertEqual(class_totals, {"unclassified": 75})
+        self.assertEqual(total, 75)
+
+    def test_transcript_window_makes_repeats_post_compaction(self):
+        windows = [{"window_start": 5.0, "window_end": 50.0}]
+        repeats, total, class_totals = _repeats(poll_pair_events(), windows)
+        self.assertEqual(repeats[0].occurrence_classes,
+                         ["first", "post_compaction"])
+        self.assertEqual(class_totals, {"post_compaction": 75})
+        self.assertEqual(total, 75)
+
+    def test_poll_pair_end_to_end(self):
+        repeats, total, class_totals = _repeats(poll_pair_events(), [])
+        self.assertEqual(repeats[0].occurrence_classes, ["first", "poll"])
+        self.assertEqual(repeats[0].tool_name, "Read")
+        self.assertEqual(class_totals, {"poll": 75})
+        self.assertEqual(total, 75)
+
+    def test_class_totals_count_all_groups_not_top10(self):
+        # 12 distinct groups (bodies differ, zero-padded so lengths match);
+        # 1000s gaps so nothing is poll; no windows so unclassified. Top-10
+        # keeps 10 rows, but totals must cover ALL 12 groups.
+        events = []
+        seq = 0
+        for i in range(12):
+            body = "g%02d %s" % (i, BIG[:280])  # 286 chars -> 71 tokens
+            base = 10.0 + i * 1000.0
+            seq += 1
+            events.append(tool_call("c%d" % i, "Read", base, seq))
+            seq += 1
+            events.append(tool_result("c%d" % i, body, base, seq))
+            seq += 1
+            events.append(tool_call("c%d" % i, "Read", base + 1000.0, seq))
+            seq += 1
+            events.append(tool_result("c%d" % i, body, base + 1000.0, seq))
+        repeats, total, class_totals = _repeats(events, [])
+        self.assertEqual(len(repeats), 10)
+        self.assertEqual(total, class_totals["unclassified"])
+        self.assertGreater(total, sum(r.extra_tokens for r in repeats))
+
+    def test_mixed_tools_yield_no_tool_name(self):
+        events = [tool_call("c1", "Read", 10.0, 1),
+                  tool_result("c1", BIG, 10.0, 2),
+                  tool_call("c2", "Grep", 900.0, 3),
+                  tool_result("c2", BIG, 900.0, 4)]
+        repeats, _, _ = _repeats(events, [])
+        self.assertIsNone(repeats[0].tool_name)
