@@ -4,7 +4,10 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
+from agent_session_detective.report import _render_token_governance
 from agent_session_detective.tokenstats import (
+    Repeat,
+    TokenStats,
     _classify_occurrences,
     _extra_by_class,
     _repeats,
@@ -236,3 +239,41 @@ class BuildTokenStatsTest(unittest.TestCase):
             compaction_windows=windows, compaction_source="billed")
         self.assertEqual(stats.compaction_source, "billed")
         self.assertEqual(stats.compaction_points, windows)
+
+
+class RenderTokenGovernanceRepeatsTest(unittest.TestCase):
+    def _repeat(self, classes):
+        counts = {}
+        for cls in classes[1:]:
+            counts[cls] = counts.get(cls, 0) + 100
+        return Repeat(preview="same output", occurrences=3, tokens_each=100,
+                      extra_tokens=200, tool_name="Read", chars_each=300,
+                      occurrence_classes=classes, extra_by_class=counts)
+
+    def _stats(self, source):
+        if source:
+            classes = ["first", "post_compaction", "post_compaction"]
+            class_totals = {"post_compaction": 200}
+            points = [{"window_start": 5.0, "window_end": 50.0}]
+        else:
+            classes = ["first", "unclassified", "unclassified"]
+            class_totals = {"unclassified": 200}
+            points = []
+        repeat = self._repeat(classes)
+        return TokenStats(repeats=[repeat], repeat_extra_tokens=200,
+                          repeat_class_totals=class_totals,
+                          compaction_source=source,
+                          compaction_points=points)
+
+    def test_with_source_captions_legal_rereads(self):
+        html = _render_token_governance(self._stats("transcript+billed"))
+        self.assertIn("压缩恢复 ×2", html)
+        self.assertIn("协议内合法重读", html)
+        self.assertIn("重读税下界", html)
+        self.assertNotIn("状态未外置", html)
+
+    def test_without_source_stays_neutral(self):
+        html = _render_token_governance(self._stats(None))
+        self.assertIn("未分类 ×2", html)
+        self.assertIn("无压缩证据源", html)
+        self.assertNotIn("状态未外置", html)

@@ -158,6 +158,14 @@ def _growth_chart(stats: TokenStats) -> str:
     return "".join(parts)
 
 
+REPEAT_CLASS_LABELS = {
+    "post_compaction": "压缩恢复",
+    "poll": "轮询",
+    "no_compaction": "无压缩",
+    "unclassified": "未分类",
+}
+
+
 def _render_token_governance(stats: TokenStats) -> str:
     out: List[str] = ["<h2>Token Governance</h2>"]
 
@@ -249,17 +257,33 @@ def _render_token_governance(stats: TokenStats) -> str:
     if stats.repeats:
         out.append("<details><summary>repeat injection (%d groups, ~%d extra tokens)"
                    "</summary><div class='body'><table>"
-                   "<tr><th>occurrences</th><th>~tokens each</th><th>extra tokens</th><th>content</th></tr>"
+                   "<tr><th>occurrences</th><th>~tokens each</th><th>extra tokens</th>"
+                   "<th>classes</th><th>content</th></tr>"
                    % (len(stats.repeats), stats.repeat_extra_tokens))
         for r in stats.repeats:
+            counts: dict = {}
+            for cls in r.occurrence_classes[1:]:
+                counts[cls] = counts.get(cls, 0) + 1
+            classes = " · ".join(
+                "%s ×%d" % (REPEAT_CLASS_LABELS.get(c, c), n)
+                for c, n in sorted(counts.items())) or "-"
             out.append(
-                "<tr><td>%d</td><td>%d</td><td>%d</td><td>%s</td></tr>"
-                % (r.occurrences, r.tokens_each, r.extra_tokens, esc(r.preview[:120]))
+                "<tr><td>%d</td><td>%d</td><td>%d</td><td>%s</td><td>%s</td></tr>"
+                % (r.occurrences, r.tokens_each, r.extra_tokens, esc(classes),
+                   esc(r.preview[:120]))
             )
-        out.append("</table><p class='meta'>identical tool results (≥%d chars) seen more "
-                   "than once. Re-injection is the observable signature of state not being "
-                   "externalized — a derived summary should replace the replay.</p>"
-                   "</div></details>" % 200)
+        post = stats.repeat_class_totals.get("post_compaction", 0)
+        tax = stats.repeat_extra_tokens - post
+        if stats.compaction_source:
+            out.append(
+                "</table><p class='meta'>压缩点 %d 个（来源 %s）：其中压缩恢复 ~%d token "
+                "属压缩恢复协议内合法重读，其余 ~%d 才是重读税。被编辑文件（如 progress.md）"
+                "内容每次不同，不构成重复组——extra 总量是重读税下界。</p></div></details>"
+                % (len(stats.compaction_points), stats.compaction_source, post, tax))
+        else:
+            out.append(
+                "</table><p class='meta'>无压缩证据源，未分类；--billed-usage 可接入账单证据"
+                "（账单锯齿可识别 CLI 形会话的压缩点）。</p></div></details>")
     return "\n".join(out)
 
 
