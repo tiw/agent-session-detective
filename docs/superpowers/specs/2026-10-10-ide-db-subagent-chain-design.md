@@ -106,7 +106,9 @@ exactly like `attach_billed_usage`.
 
 Per child: `source = session.directory / ("ide-db-%s.jsonl" % kid_uuid)`
 (synthetic path; `Event.source` is a `Path`), `origin =
-"subagent:ide-db:<kid-uuid>"`, `seq` = DB row order (`ORDER BY id`),
+"subagent:ide-db:<kid-uuid>"`, `seq` = DB row order (`ORDER BY gmt_create,
+id`; the uuid `id` is random — measured: `id` order ≠ `gmt_create` order on
+9/9 children),
 `ts = gmt_create / 1000` (ms epoch, `None` when absent). Every event of
 the child carries the same
 `ref = {"parent_tool_use_id": <child's parent_tool_call_id>,
@@ -151,7 +153,8 @@ ORDER BY session_id
 ```
 
 Per child: `SELECT id, role, content, request_id, token_info, gmt_create
-FROM chat_message WHERE session_id = ? ORDER BY id`.
+FROM chat_message WHERE session_id = ? ORDER BY gmt_create, id` (`gmt_create`
+is ms epoch and duplicates within a child, so `id` is the tiebreak).
 
 `skipped_already_joined` = children whose `parent_tool_call_id` ∈ claimed
 set = {disk records' `ref.parent_tool_use_id`} ∪ {subagent_meta
