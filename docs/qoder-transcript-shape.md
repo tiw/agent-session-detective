@@ -34,8 +34,8 @@ session_meta 带 `data.meta_type:"slash_command"` 与 skill filePath。
 - `entrypoint:"cli"` 指的是 agent harness 运行时而非终端 CLI —— IDE 会话
   照样写它（本工作区 8685 条记录全是该值）。
 - 「transcript 在 cache/projects/ 而非顶层 projects/」的说法仅对终端 CLI
-  会话成立；IDE 会话直接写顶层富格式。ASD 只读富格式（唯一有遥测的位置），
-  终端 CLI 会话喂不满 IR 的 FACT 列。
+  会话成立；IDE 会话直接写顶层富格式。ASD 的遥测口径只认富格式
+  （唯一有遥测的位置），终端 CLI 会话喂不满 IR 的 FACT 列。
 
 ## 薄镜像 vs 中量级：不同投影，非子集关系
 
@@ -85,7 +85,7 @@ session_meta，直接以 assistant 记录开头。
 ASD wire 层已按此实现 `_detect_format` 的多记录扫描；`load_session` 对
 qoder-cli 不做拒绝，而是降级加载 —— `source_format="qoder-cli"`、
 `compaction_telemetry_available=False`，对话与工具调用照常重建，页面/树
-视图渲染「no usage telemetry」提示（token 成本不可用）；web 发现层 codex
+视图渲染 `no usage telemetry` 提示（token 成本不可用）；web 发现层 codex
 glob 已收紧为 `rollout-*` 前缀（旧 `*/*/*/*.jsonl` 会把 qoder 根下 247 个
 subagent 文件误标成 codex 会话）。
 
