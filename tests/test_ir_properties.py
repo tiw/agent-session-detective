@@ -346,7 +346,7 @@ class EvidencePropertiesTest(unittest.TestCase):
             self.assertEqual(links["dispatches"], len(dispatches), name)
             self.assertEqual(
                 links["joined"] + links["joined_via_meta_only"]
-                + links["orphan_dispatches"],
+                + links["joined_via_ide_db"] + links["orphan_dispatches"],
                 len(dispatches),
                 name,
             )

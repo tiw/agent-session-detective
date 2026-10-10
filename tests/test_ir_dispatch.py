@@ -203,6 +203,7 @@ class DispatchJoinTest(IREventsTestCase, unittest.TestCase):
         self.assertEqual(links, {
             "dispatches": 3,
             "joined": 1,
+            "joined_via_ide_db": 0,
             "joined_via_meta_only": 1,
             "orphan_dispatches": 1,
             "unmatched_subagent_files": 1,

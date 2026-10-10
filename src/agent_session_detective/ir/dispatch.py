@@ -228,6 +228,7 @@ def build_dispatches(
     tier_counts = {"A": 0, "B": 0, "C": 0}
     briefs_found = 0
     joined = 0
+    joined_via_ide_db = 0
     joined_via_meta_only = 0
     orphan_dispatches = 0
 
@@ -244,7 +245,10 @@ def build_dispatches(
             brief: Optional[ContentItem] = None
             if subagent_agent_id is not None:
                 if row["link_source"] == "records":
-                    joined += 1
+                    if subagent_agent_id.startswith("subagent:ide-db:"):
+                        joined_via_ide_db += 1
+                    else:
+                        joined += 1
                 else:
                     joined_via_meta_only += 1
                 meta = subagent_meta.get(subagent_agent_id)
@@ -369,6 +373,7 @@ def build_dispatches(
     dispatch_links = {
         "dispatches": len(dispatches),
         "joined": joined,
+        "joined_via_ide_db": joined_via_ide_db,
         "joined_via_meta_only": joined_via_meta_only,
         "orphan_dispatches": orphan_dispatches,
         "unmatched_subagent_files": unmatched_subagent_files,
