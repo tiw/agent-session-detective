@@ -10,8 +10,10 @@ from pathlib import Path
 from typing import List
 
 from .billing import (
+    BillingUnavailable,
     attach_billed_usage,
-    billed_compaction_points,
+    compaction_points_from_series,
+    query_billed_series,
     session_uuid_from_source,
 )
 from .catalog import load_catalog
@@ -174,19 +176,24 @@ def main(argv=None) -> int:
             )
 
     billed_points = []
+    billed_series = []
     if args.billed_usage:
         billed_uuid = session_uuid_from_source(session_source)
         if billed_uuid is not None:
-            billed_points, billed_error = billed_compaction_points(
-                billed_uuid, db_path=args.billed_db)
-            if billed_error:
+            try:
+                billed_series = query_billed_series(
+                    billed_uuid, db_path=args.billed_db)
+            except BillingUnavailable as exc:
                 document.coverage.notes.append(
-                    "billed_compaction: unavailable (%s)" % billed_error)
+                    "billed_compaction: unavailable (%s)" % exc.reason)
+            billed_points = compaction_points_from_series(billed_series)
     compaction_windows, compaction_source = merge_compaction_windows(
         timeline, billed_points)
     token_stats = build_token_stats(
         session, timeline,
-        compaction_windows=compaction_windows, compaction_source=compaction_source)
+        compaction_windows=compaction_windows,
+        compaction_source=compaction_source,
+        billed_series=billed_series)
     if token_stats.usage_records:
         hit = "%.1f%%" % (token_stats.cache_hit_rate * 100) if token_stats.cache_hit_rate is not None else "?"
         print(

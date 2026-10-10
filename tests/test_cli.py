@@ -4,6 +4,7 @@ import shutil
 import sqlite3
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -338,6 +339,75 @@ class BilledUsageFlagTests(unittest.TestCase):
             stats = render.call_args.kwargs["token_stats"]
             self.assertIsNone(stats.compaction_source)
             self.assertEqual(stats.compaction_points, [])
+
+    def test_billed_usage_rebuilds_turn_growth_for_cli_transcript(self):
+        # Terminal-CLI transcripts embed no usage telemetry; the billed
+        # prompt series is the only per-request context measurement.
+        def iso(epoch_ms):
+            stamp = datetime.fromtimestamp(epoch_ms / 1000, tz=timezone.utc)
+            return stamp.strftime("%Y-%m-%dT%H:%M:%S") + "Z"
+
+        records = [{"type": "session_meta", "sessionId": "s1",
+                    "timestamp": iso(1754709620000), "cwd": "/w",
+                    "data": {"meta_type": "slash_command"}}]
+        for i, ts in enumerate((1754709625000, 1754709635000,
+                                1754709645000, 1754709655000)):
+            records.append({
+                "type": "user", "sessionId": "s1", "timestamp": iso(ts),
+                "cwd": "/w", "message": {
+                    "role": "user",
+                    "content": [{"type": "text", "text": "request %d" % i}]}})
+            records.append({
+                "type": "assistant", "sessionId": "s1",
+                "timestamp": iso(ts + 10000), "cwd": "/w", "message": {
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "reply %d" % i}]}})
+
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            transcript = base / (BILLING_UUID + ".jsonl")
+            transcript.write_text(
+                "\n".join(json.dumps(r) for r in records), encoding="utf-8")
+            db = base / "local.db"
+            conn = sqlite3.connect(db)
+            conn.execute(
+                "CREATE TABLE chat_message "
+                "(session_id TEXT, gmt_create INTEGER, token_info TEXT)")
+            conn.executemany(
+                "INSERT INTO chat_message VALUES (?, ?, ?)",
+                [(BILLING_UUID, gmt,
+                  json.dumps({"prompt_tokens": prompt,
+                              "completion_tokens": 40,
+                              "cached_tokens": cached}))
+                 for gmt, prompt, cached in (
+                     (1754709632658, 100000, 80000),
+                     (1754709642658, 50000, 0),
+                     (1754709652658, 60000, 0))])
+            conn.commit()
+            conn.close()
+
+            with patch("agent_session_detective.billing.DEFAULT_DB_PATH",
+                       str(db)), patch(
+                           "agent_session_detective.cli.render_report",
+                           return_value="<html>report</html>") as render:
+                exit_code = cli.main([
+                    str(transcript), "--no-judge", "--billed-usage",
+                    "--billed-db", str(db)])
+
+            self.assertEqual(exit_code, 0)
+            stats = render.call_args.kwargs["token_stats"]
+            self.assertEqual(len(stats.turn_growth), 4)
+            self.assertEqual(
+                [r.context_at_start for r in stats.turn_growth],
+                [100000, 50000, 60000, 60000])
+            self.assertTrue(stats.turn_growth[0].crossed_compaction)
+            self.assertFalse(stats.turn_growth[1].crossed_compaction)
+            self.assertNotEqual(stats.growth_verdict,
+                                "unavailable (no context telemetry)")
+            # Billed rows reconstruct turn contexts only; they never mix
+            # into the EST usage totals (document.billing holds those).
+            self.assertEqual(stats.usage_records, [])
+            self.assertEqual(stats.input_total, 0)
 
 
 class IdeDbFlagTests(unittest.TestCase):

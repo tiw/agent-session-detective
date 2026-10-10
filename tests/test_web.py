@@ -7,6 +7,7 @@ import unittest
 import urllib.error
 import urllib.parse
 import urllib.request
+from datetime import datetime, timezone
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 from types import SimpleNamespace
@@ -57,7 +58,7 @@ class QoderWebTests(unittest.TestCase):
                 },
             )
 
-    def test_fingerprint_uses_v9_and_ir_version_for_transcript_file_metadata(self):
+    def test_fingerprint_uses_v10_and_ir_version_for_transcript_file_metadata(self):
         with tempfile.TemporaryDirectory() as directory:
             transcript = Path(directory) / "transcript.jsonl"
             transcript.write_text("hello", encoding="utf-8")
@@ -65,22 +66,22 @@ class QoderWebTests(unittest.TestCase):
 
             self.assertEqual(
                 fingerprint(str(transcript), "test-model"),
-                "1234.000:5:test-model:v9:ir%s" % IR_VERSION,
+                "1234.000:5:test-model:v10:ir%s" % IR_VERSION,
             )
 
-    def test_v9_fingerprint_invalidates_v8_cached_results(self):
-        # v8 cached results carry repeats without per-occurrence classes;
-        # the v9 bump must make cache_load miss.
-        v8_fp = "1234.000:5:test-model:v8:ir1.6"
+    def test_v10_fingerprint_invalidates_v9_cached_results(self):
+        # v9 cached billed results lack the turn-growth series rebuilt from
+        # the billed prompt rows; the v10 bump must make cache_load miss.
         v9_fp = "1234.000:5:test-model:v9:ir1.6"
-        result = {"status_line": "stale v8 payload"}
+        v10_fp = "1234.000:5:test-model:v10:ir1.6"
+        result = {"status_line": "stale v9 payload"}
 
         original_cache_dir = web.CACHE_DIR
         web.CACHE_DIR = Path(tempfile.mkdtemp())
         try:
-            cache_store("k", v8_fp, result)
-            self.assertEqual(cache_load("k", v8_fp), result)
-            self.assertIsNone(cache_load("k", v9_fp))
+            cache_store("k", v9_fp, result)
+            self.assertEqual(cache_load("k", v9_fp), result)
+            self.assertIsNone(cache_load("k", v10_fp))
         finally:
             web.CACHE_DIR = original_cache_dir
 
@@ -398,6 +399,109 @@ class RunAuditBilledTests(unittest.TestCase):
             '{"output": "hello world"}}}\n',
             encoding="utf-8")
         return transcript
+
+    @staticmethod
+    def _iso(epoch_ms):
+        stamp = datetime.fromtimestamp(epoch_ms / 1000, tz=timezone.utc)
+        return stamp.strftime("%Y-%m-%dT%H:%M:%S") + "Z"
+
+    def _cli_transcript(self, directory):
+        """The b1d65022 shape: terminal-CLI transcript (session_meta
+        leader + sessionId records) with no embedded usage telemetry."""
+        records = [{
+            "type": "session_meta", "sessionId": "s1",
+            "timestamp": self._iso(1754709620000), "cwd": "/w",
+            "data": {"meta_type": "slash_command"},
+        }]
+        for i, ts in enumerate((1754709625000, 1754709635000,
+                                1754709645000, 1754709655000)):
+            records.append({
+                "type": "user", "sessionId": "s1",
+                "timestamp": self._iso(ts), "cwd": "/w",
+                "message": {"role": "user",
+                            "content": [{"type": "text",
+                                         "text": "request %d" % i}]}})
+            records.append({
+                "type": "assistant", "sessionId": "s1",
+                "timestamp": self._iso(ts + 10000), "cwd": "/w",
+                "message": {"role": "assistant",
+                            "content": [{"type": "text",
+                                         "text": "reply %d" % i}]}})
+        transcript = Path(directory) / (self.BILLING_UUID + ".jsonl")
+        transcript.write_text(
+            "\n".join(json.dumps(r) for r in records), encoding="utf-8")
+        return transcript
+
+    def _series_db(self, path):
+        conn = sqlite3.connect(path)
+        conn.execute(
+            "CREATE TABLE chat_message "
+            "(session_id TEXT, gmt_create INTEGER, token_info TEXT)")
+        conn.executemany(
+            "INSERT INTO chat_message VALUES (?, ?, ?)",
+            [(self.BILLING_UUID, gmt,
+              json.dumps({"prompt_tokens": prompt, "completion_tokens": 40,
+                          "cached_tokens": cached}))
+             for gmt, prompt, cached in (
+                 (1754709632658, 100000, 80000),
+                 (1754709642658, 50000, 0),
+                 (1754709652658, 60000, 0))])
+        conn.commit()
+        conn.close()
+
+    def test_billed_audit_rebuilds_turn_growth_for_cli_shape_transcript(self):
+        with tempfile.TemporaryDirectory() as directory:
+            db = Path(directory) / "local.db"
+            self._series_db(db)
+            transcript = self._cli_transcript(directory)
+            original_cache_dir = web.CACHE_DIR
+            web.CACHE_DIR = Path(tempfile.mkdtemp())
+            try:
+                with patch("agent_session_detective.billing.DEFAULT_DB_PATH",
+                           str(db)):
+                    job = web.Job({"path": str(transcript), "billed": True})
+                    web.run_audit(job)
+                self.assertEqual(job.status, "done")
+                stats = job.result["token_stats"]
+                rows = stats["turn_growth"]
+                self.assertEqual(len(rows), 4)
+                self.assertEqual([r["context_at_start"] for r in rows],
+                                 [100000, 50000, 60000, 60000])
+                self.assertEqual([r["exact"] for r in rows],
+                                 [True, True, True, False])
+                # The 100000 -> 50000 cold-cache drop sits between turns 1
+                # and 2: that bar is compaction-crossed, not negative growth.
+                self.assertTrue(rows[0]["crossed_compaction"])
+                self.assertFalse(rows[1]["crossed_compaction"])
+                self.assertNotEqual(stats["growth_verdict"],
+                                    "unavailable (no context telemetry)")
+                self.assertTrue(stats["bucket_totals"])
+                # Billed rows feed turn contexts only; session-level billed
+                # totals stay in document.billing, never in the EST usage.
+                self.assertEqual(stats["input_total"], 0)
+            finally:
+                web.CACHE_DIR = original_cache_dir
+
+    def test_billed_db_unavailable_keeps_growth_unavailable(self):
+        with tempfile.TemporaryDirectory() as directory:
+            transcript = self._cli_transcript(directory)
+            original_cache_dir = web.CACHE_DIR
+            web.CACHE_DIR = Path(tempfile.mkdtemp())
+            try:
+                with patch("agent_session_detective.billing.DEFAULT_DB_PATH",
+                           str(Path(directory) / "absent.db")):
+                    job = web.Job({"path": str(transcript), "billed": True})
+                    web.run_audit(job)
+                self.assertEqual(job.status, "done")
+                stats = job.result["token_stats"]
+                self.assertEqual(stats["turn_growth"], [])
+                self.assertEqual(stats["growth_verdict"],
+                                 "unavailable (no context telemetry)")
+                self.assertTrue(any(
+                    "billed_compaction unavailable" in s
+                    for s in job.steps))
+            finally:
+                web.CACHE_DIR = original_cache_dir
 
     def test_billed_audit_classifies_repeats(self):
         with tempfile.TemporaryDirectory() as directory:

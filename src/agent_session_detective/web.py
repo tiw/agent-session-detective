@@ -99,7 +99,10 @@ def fingerprint(session_path: str, judge_model: str) -> str:
     # v9 adds repeat-injection classification (per-occurrence classes,
     # repeat_class_totals, compaction_source/points) — v8 cached results
     # would render repeats without the class badges and the split caption.
-    return "%.3f:%d:%s:v9:ir%s" % (newest, total, judge_model, IR_VERSION)
+    # v10 feeds the billed prompt series into turn_growth: v9 cached results
+    # for billed CLI-shape logs (no transcript telemetry) lack the growth
+    # rows and would keep rendering the "no context telemetry" gap note.
+    return "%.3f:%d:%s:v10:ir%s" % (newest, total, judge_model, IR_VERSION)
 
 
 def cache_load(key: str, fp: str) -> Optional[dict]:
@@ -636,17 +639,23 @@ def run_audit(job: Job) -> None:
                 if_results.append(evaluate_playbook(judge, Path(playbook), session))
         job.mark("deriving next steps")
         billed_points = []
+        billed_series = []
         if job.params.get("billed"):
-            from .billing import billed_compaction_points, session_uuid_from_source
+            from .billing import (BillingUnavailable, compaction_points_from_series,
+                                  query_billed_series, session_uuid_from_source)
             billed_uuid = session_uuid_from_source(source_path)
             if billed_uuid is not None:
-                billed_points, billed_error = billed_compaction_points(billed_uuid)
-                if billed_error:
-                    job.mark("billed_compaction unavailable: %s" % billed_error)
+                try:
+                    billed_series = query_billed_series(billed_uuid)
+                except BillingUnavailable as exc:
+                    job.mark("billed_compaction unavailable: %s" % exc.reason)
+                billed_points = compaction_points_from_series(billed_series)
         compaction_windows, compaction_source = merge_compaction_windows(timeline, billed_points)
         token_stats = build_token_stats(
             session, timeline,
-            compaction_windows=compaction_windows, compaction_source=compaction_source)
+            compaction_windows=compaction_windows,
+            compaction_source=compaction_source,
+            billed_series=billed_series)
         # The IR document is built here so the result carries the
         # evidence-backed load ledger (IR 1.1) — the web layer previously
         # imported no IR.

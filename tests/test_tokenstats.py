@@ -1,10 +1,14 @@
 """Repeat-injection classification: per-occurrence classes and totals."""
 
+import json
+import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
+from agent_session_detective.billing import compaction_points_from_series
 from agent_session_detective.report import _render_token_governance
+from agent_session_detective.timeline import build_timeline
 from agent_session_detective.tokenstats import (
     Repeat,
     TokenStats,
@@ -14,7 +18,7 @@ from agent_session_detective.tokenstats import (
     build_token_stats,
     merge_compaction_windows,
 )
-from agent_session_detective.wire import Event
+from agent_session_detective.wire import Event, load_session
 
 BIG = "x" * 300  # estimate_tokens -> 75 (ASCII, 4 chars per token)
 SESSION = Path("/tmp/asd-test.jsonl")
@@ -277,3 +281,106 @@ class RenderTokenGovernanceRepeatsTest(unittest.TestCase):
         self.assertIn("未分类 ×2", html)
         self.assertIn("无压缩证据源", html)
         self.assertNotIn("状态未外置", html)
+
+
+class BilledSeriesTurnGrowthTest(unittest.TestCase):
+    """The SharedClientCache billed prompt series as the context-measurement
+    source for CLI-shape transcripts, which embed no usage telemetry."""
+
+    RECORDS = []
+    for i in range(5):
+        RECORDS.append({"type": "user",
+                        "timestamp": "2026-10-07T08:%02d:00Z" % i,
+                        "message": {"content": "request %d" % i}})
+        RECORDS.append({"type": "assistant",
+                        "timestamp": "2026-10-07T08:%02d:10Z" % i,
+                        "message": {"content": "reply %d" % i}})
+
+    def _session(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "s.jsonl"
+            source.write_text(
+                "\n".join(json.dumps(r) for r in self.RECORDS),
+                encoding="utf-8")
+            return load_session(source)
+
+    @staticmethod
+    def _billed_row(ts, prompt, cached=0):
+        return {"ts": ts, "prompt": prompt, "completion": 40, "cached": cached}
+
+    def _series(self, session, prompts, cached=None):
+        turns = [t for t in session.turns() if t.origin == "main"]
+        self.assertEqual(len(turns), len(prompts))
+        cached = cached or [0] * len(prompts)
+        return [self._billed_row(t.ts + 5, p, c)
+                for t, p, c in zip(turns, prompts, cached)]
+
+    def test_billed_series_reconstructs_turn_growth(self):
+        session = self._session()
+        prompts = [100000, 110000, 120000, 130000, 140000]
+        series = self._series(session, prompts)
+        stats = build_token_stats(session, build_timeline(session),
+                                  billed_series=series)
+        self.assertEqual(len(stats.turn_growth), 5)
+        self.assertEqual([r.context_at_start for r in stats.turn_growth],
+                         prompts)
+        self.assertTrue(all(r.exact for r in stats.turn_growth))
+        self.assertEqual([r.added for r in stats.turn_growth],
+                         [10000, 10000, 10000, 10000, None])
+        self.assertNotEqual(stats.growth_verdict,
+                            "unavailable (no context telemetry)")
+        self.assertTrue(stats.bucket_totals)
+
+    def test_billed_series_stays_out_of_usage_totals(self):
+        session = self._session()
+        series = self._series(session, [100000, 110000, 120000, 130000, 140000])
+        stats = build_token_stats(session, build_timeline(session),
+                                  billed_series=series)
+        # Billed rows feed turn contexts only; the session-level billed
+        # totals live in document.billing, never mixed into EST usage.
+        self.assertEqual(stats.usage_records, [])
+        self.assertEqual(stats.input_total, 0)
+        self.assertIsNone(stats.cache_hit_rate)
+
+    def test_turn_without_billed_row_carries_forward(self):
+        session = self._session()
+        turns = [t for t in session.turns() if t.origin == "main"]
+        series = [self._billed_row(turns[0].ts + 5, 100000),
+                  self._billed_row(turns[2].ts + 5, 120000)]
+        stats = build_token_stats(session, build_timeline(session),
+                                  billed_series=series)
+        rows = stats.turn_growth
+        self.assertEqual(rows[1].context_at_start, 100000)
+        self.assertFalse(rows[1].exact)
+        self.assertEqual(rows[2].context_at_start, 120000)
+        self.assertTrue(rows[2].exact)
+
+    def test_billed_compaction_window_marks_crossed_compaction(self):
+        session = self._session()
+        # Sawtooth: the 110000 -> 40000 drop with a cold cache is one
+        # compaction, landing between turn 2 and turn 3.
+        prompts = [100000, 110000, 40000, 50000, 60000]
+        cached = [80000, 90000, 0, 10000, 20000]
+        series = self._series(session, prompts, cached)
+        timeline = build_timeline(session)
+        points = compaction_points_from_series(series)
+        windows, source = merge_compaction_windows(timeline, points)
+        stats = build_token_stats(session, timeline,
+                                  compaction_windows=windows,
+                                  compaction_source=source,
+                                  billed_series=series)
+        self.assertEqual(source, "billed")
+        self.assertEqual(len(points), 1)
+        # window_start (the pre-drop request, 1791360065) falls inside turn
+        # 2's span [1791360060, 1791360120), so turn 2's bar — the one whose
+        # added contains the 110000 -> 40000 drop — is compaction-crossed.
+        self.assertTrue(stats.turn_growth[1].crossed_compaction)
+        self.assertFalse(stats.turn_growth[0].crossed_compaction)
+        self.assertFalse(stats.turn_growth[2].crossed_compaction)
+
+    def test_without_series_cli_shape_stays_unavailable(self):
+        session = self._session()
+        stats = build_token_stats(session, build_timeline(session))
+        self.assertEqual(stats.turn_growth, [])
+        self.assertEqual(stats.growth_verdict,
+                         "unavailable (no context telemetry)")

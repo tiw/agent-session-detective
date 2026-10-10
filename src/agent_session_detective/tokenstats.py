@@ -202,19 +202,30 @@ def _hash_runs(events: List[Event]) -> Tuple[List[PromptHashRun], Optional[int]]
     return runs, flips if has_request_hash else None
 
 
-def _billing_turn_contexts(session: Session, turns: List) -> List[Tuple[int, bool]]:
+def _billing_turn_contexts(session: Session, turns: List,
+                           billed_series: Optional[List[dict]] = None,
+                           ) -> List[Tuple[int, bool]]:
     """Per-turn context for billing-only logs (Qoder, Codex rollouts).
 
     A request's full prompt (input + cache read + cache creation) is the
     context the model saw, so a turn's first usage record measures that
     turn's starting context (exact). Turns with no usage record carry the
-    last prompt forward (exact=False).
+    last prompt forward (exact=False). A SharedClientCache billed series
+    carries the same shape: prompt_tokens already includes the cached
+    portion, so each row is the full context at that request.
     """
-    prompts = [
-        (r.ts, r.input_total)
-        for r in _usage_from_events(session.events)
-        if r.origin == "main" and r.ts is not None and r.input_total > 0
-    ]
+    if billed_series:
+        prompts = sorted(
+            (float(r["ts"]), int(r["prompt"]))
+            for r in billed_series
+            if r.get("ts") is not None and int(r.get("prompt") or 0) > 0
+        )
+    else:
+        prompts = [
+            (r.ts, r.input_total)
+            for r in _usage_from_events(session.events)
+            if r.origin == "main" and r.ts is not None and r.input_total > 0
+        ]
     out: List[Tuple[int, bool]] = []
     for i, t in enumerate(turns):
         hi = turns[i + 1].ts if i + 1 < len(turns) else None
@@ -233,7 +244,9 @@ def _billing_turn_contexts(session: Session, turns: List) -> List[Tuple[int, boo
     return out
 
 
-def _turn_contexts(session: Session) -> List[Tuple[int, bool]]:
+def _turn_contexts(session: Session,
+                   billed_series: Optional[List[dict]] = None,
+                   ) -> List[Tuple[int, bool]]:
     """Context size at each user turn's start: (tokens, exact).
 
     Desktop logs measure this directly (token_counting.turn_recorded); the
@@ -254,7 +267,7 @@ def _turn_contexts(session: Session) -> List[Tuple[int, bool]]:
         if e.type == "StatusUpdate" and e.origin == "main" and e.payload.get("context_tokens")
     ]
     if not exact and not statuses:
-        return _billing_turn_contexts(session, turns)
+        return _billing_turn_contexts(session, turns, billed_series)
 
     def interpolated(t_ts: Optional[float]) -> int:
         before = [s for s in statuses if s[0] is not None and t_ts is not None and s[0] <= t_ts]
@@ -300,7 +313,10 @@ def _split_user_input(event: Event) -> Tuple[str, str]:
     return "".join(human), "".join(injected)
 
 
-def _has_context_measurement(session: Session) -> bool:
+def _has_context_measurement(session: Session,
+                             billed_series: Optional[List[dict]] = None) -> bool:
+    if billed_series:
+        return True
     return any(
         e.origin == "main"
         and (
@@ -316,19 +332,27 @@ def _has_context_measurement(session: Session) -> bool:
     )
 
 
-def _turn_growth(session: Session, timeline: Timeline) -> List[TurnGrowth]:
+def _turn_growth(session: Session, timeline: Timeline,
+                 billed_series: Optional[List[dict]] = None,
+                 compaction_windows: Optional[List[dict]] = None,
+                 ) -> List[TurnGrowth]:
     # Context growth requires an actual context measurement (status series,
     # per-turn tokens, or per-request billing). Do not turn an absent series
     # into zero-delta pseudo-data.
-    if not _has_context_measurement(session):
+    if not _has_context_measurement(session, billed_series):
         return []
 
     # Subagent loops have their own context windows; per-turn growth and
     # buckets account for the main agent only.
     turns = [t for t in session.turns() if t.origin == "main"]
-    contexts = _turn_contexts(session)
+    contexts = _turn_contexts(session, billed_series)
     n = len(turns)
     comp_starts = [c.begin_ts for c in timeline.compactions if c.begin_ts]
+    # A billed sawtooth window marks the pre-drop request (window_start), so
+    # the crossed bar is the one whose added contains the drop; transcript
+    # windows repeat begin_ts, so the union needs no dedup.
+    comp_starts += [w.get("window_start") for w in compaction_windows or []
+                    if w.get("window_start")]
     skill_ids = {
         str(e.payload.get("id"))
         for e in session.events
@@ -550,6 +574,7 @@ def build_token_stats(
     timeline: Timeline,
     compaction_windows: Optional[List[dict]] = None,
     compaction_source: Optional[str] = None,
+    billed_series: Optional[List[dict]] = None,
 ) -> TokenStats:
     stats = TokenStats()
     stats.usage_records = _usage_from_events(session.events)
@@ -561,10 +586,11 @@ def build_token_stats(
         stats.cache_hit_rate = stats.cache_read_total / stats.input_total
 
     stats.hash_runs, stats.hash_flips = _hash_runs(session.events)
-    stats.turn_growth = _turn_growth(session, timeline)
+    stats.turn_growth = _turn_growth(session, timeline, billed_series,
+                                     compaction_windows)
     stats.growth_verdict = (
         _growth_verdict(stats.turn_growth)
-        if _has_context_measurement(session)
+        if _has_context_measurement(session, billed_series)
         else "unavailable (no context telemetry)"
     )
     stats.repeats, stats.repeat_extra_tokens, stats.repeat_class_totals = \
