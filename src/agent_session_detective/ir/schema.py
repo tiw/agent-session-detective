@@ -174,6 +174,8 @@ class CoverageReport:
     phase_recognition: dict = field(default_factory=dict)
     # IR 1.2: bare-id → namespaced-twin merges, ambiguities counted.
     skill_identity: dict = field(default_factory=dict)
+    # IR 1.6: distinct-lead intervention counts, re-derived from the rows.
+    intervention_evidence: dict = field(default_factory=dict)
 
 
 @dataclass

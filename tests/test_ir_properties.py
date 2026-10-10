@@ -421,6 +421,40 @@ class EvidencePropertiesTest(unittest.TestCase):
                     if observation.item_id is not None:
                         self.assertIn(observation.item_id, items_by_id, name)
 
+    def test_intervention_evidence_reconciles_with_the_shipped_rows(self):
+        for name in ALL_FIXTURES:
+            document = build(name)
+            rows = document.interventions
+            label_by_lead = {}
+            for row in rows:
+                label_by_lead.setdefault(row.lead_sha1, row.label)
+            labels = {}
+            for label in label_by_lead.values():
+                labels[label] = labels.get(label, 0) + 1
+            conflicts = sorted(
+                {row.lead_sha1 for row in rows
+                 if label_by_lead[row.lead_sha1] != row.label}
+            )
+            evidence = document.coverage.intervention_evidence
+
+            self.assertEqual(evidence["rows"], len(rows), name)
+            self.assertEqual(evidence["leads"], len(label_by_lead), name)
+            self.assertEqual(
+                evidence["labels"],
+                {label: labels[label] for label in sorted(labels)},
+                name,
+            )
+            self.assertEqual(
+                evidence["residue"], labels.get("unclassified", 0), name)
+            self.assertEqual(
+                evidence["residue_rate"],
+                "%d/%d" % (evidence["residue"], evidence["leads"]),
+                name,
+            )
+            self.assertEqual(evidence["label_conflicts"], conflicts, name)
+            self.assertEqual(
+                sum(evidence["labels"].values()), evidence["leads"], name)
+
 
 class FixtureParityTest(unittest.TestCase):
     def test_registry_matches_the_fixture_directory(self):

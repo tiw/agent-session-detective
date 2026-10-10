@@ -4,6 +4,7 @@ from agent_session_detective.ir.coverage import build_coverage
 from agent_session_detective.ir.items import Extraction
 from agent_session_detective.ir.schema import (
     ContentItem,
+    Intervention,
     LLMCall,
     RequestInput,
     RequestOutput,
@@ -47,6 +48,17 @@ def call(call_id, agent_id="main", first_seq=2, last_seq=3, tier=1, **fields):
         identity_tier=tier,
         input=RequestInput(**values),
         output=RequestOutput(parts=[], output_tokens=0),
+    )
+
+
+def intervention(item_id, label, lead_sha1, rule="r", evidence="e"):
+    return Intervention(
+        item_id=item_id,
+        label=label,
+        rule=rule,
+        evidence=evidence,
+        carriers=[],
+        lead_sha1=lead_sha1,
     )
 
 
@@ -162,6 +174,68 @@ class CoverageTest(unittest.TestCase):
         self.assertEqual(list(report.dropped_records), ["malformed_json", "non_dict"])
         self.assertEqual(report.notes,
                          ["corpus: all qoder sessions", "snapshot 2026-10-08"])
+
+
+class InterventionEvidenceTest(unittest.TestCase):
+    NOTE = ("counts are distinct carrier-stripped leads (lead_sha1), not rows; "
+            "residue_rate is the unclassified share of distinct leads; a lead "
+            "seen under two labels counts once, under its first-seen label")
+
+    def test_counts_distinct_leads_per_label(self):
+        report = coverage(
+            [],
+            [],
+            extraction=Extraction(interventions=[
+                intervention("main:1:0", "confirm", "s1"),
+                intervention("main:3:0", "confirm", "s1"),
+                intervention("main:5:0", "unclassified", "s2"),
+            ]),
+        )
+
+        self.assertEqual(report.intervention_evidence, {
+            "rows": 3,
+            "leads": 2,
+            "labels": {"confirm": 1, "unclassified": 1},
+            "residue": 1,
+            "residue_rate": "1/2",
+            "label_conflicts": [],
+            "note": self.NOTE,
+        })
+
+    def test_empty_rows_report_a_zero_block(self):
+        report = coverage([], [])
+
+        self.assertEqual(report.intervention_evidence, {
+            "rows": 0,
+            "leads": 0,
+            "labels": {},
+            "residue": 0,
+            "residue_rate": "0/0",
+            "label_conflicts": [],
+            "note": self.NOTE,
+        })
+
+    def test_conflicting_labels_count_first_seen_and_are_flagged(self):
+        report = coverage(
+            [],
+            [],
+            extraction=Extraction(interventions=[
+                intervention("main:1:0", "chore", "s1",
+                             rule="bare_slash_command"),
+                intervention("main:3:0", "unclassified", "s1"),
+                intervention("main:5:0", "rejection", "s1"),
+            ]),
+        )
+
+        self.assertEqual(report.intervention_evidence, {
+            "rows": 3,
+            "leads": 1,
+            "labels": {"chore": 1},
+            "residue": 0,
+            "residue_rate": "0/1",
+            "label_conflicts": ["s1"],
+            "note": self.NOTE,
+        })
 
 
 if __name__ == "__main__":

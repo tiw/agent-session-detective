@@ -575,6 +575,15 @@ class InterventionWiringTest(unittest.TestCase):
                 ("main", "user", "user_message"),
             )
 
+    def test_coverage_reports_the_distinct_lead_block(self):
+        evidence = self.document.coverage.intervention_evidence
+        self.assertEqual(evidence["rows"], 3)
+        self.assertEqual(evidence["leads"], 3)
+        self.assertEqual(evidence["labels"], {"confirm": 1, "unclassified": 2})
+        self.assertEqual(evidence["residue"], 2)
+        self.assertEqual(evidence["residue_rate"], "2/3")
+        self.assertEqual(evidence["label_conflicts"], [])
+
 
 if __name__ == "__main__":
     unittest.main()
