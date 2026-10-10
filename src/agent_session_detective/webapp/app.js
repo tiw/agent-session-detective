@@ -203,7 +203,12 @@
         : badge("dim", "no usage data")) +
       '<span class="dim" style="flex-basis:100%">growth</span>' + shapes +
       badge(fleet.total_repeat_extra_tokens >= 5000 ? "warn" : "dim",
-            "repeat +" + fleet.total_repeat_extra_tokens);
+            "repeat +" + fleet.total_repeat_extra_tokens +
+            (fleet.total_repeat_extra_tokens
+              ? " (压缩恢复 " + (((fleet.repeat_class_totals || {}).post_compaction) || 0) +
+                " / 其它 " + Math.max(0, fleet.total_repeat_extra_tokens -
+                  (((fleet.repeat_class_totals || {}).post_compaction) || 0)) + ")"
+              : ""));
   }
 
   // ------------------------------------------------------------------
@@ -542,14 +547,32 @@
     }
 
     if (t.repeats && t.repeats.length) {
+      var classLabels = {post_compaction: "压缩恢复", poll: "轮询",
+                         no_compaction: "无压缩", unclassified: "未分类"};
       var rrows = t.repeats.map(function (r) {
+        var counts = {};
+        (r.occurrence_classes || []).slice(1).forEach(function (c) {
+          counts[c] = (counts[c] || 0) + 1;
+        });
+        var classes = Object.keys(counts).sort().map(function (c) {
+          return (classLabels[c] || c) + " ×" + counts[c];
+        }).join(" · ") || "-";
         return "<tr><td>" + r.occurrences + "×</td><td>~" + r.tokens_each + "</td><td>~" +
-          r.extra_tokens + '</td><td class="dim">' + esc(r.preview.slice(0, 100)) + "</td></tr>";
+          r.extra_tokens + '</td><td class="dim">' + esc(classes) + '</td><td class="dim">' +
+          esc(r.preview.slice(0, 100)) + "</td></tr>";
       }).join("");
+      var post = ((t.repeat_class_totals || {}).post_compaction) || 0;
+      var tax = Math.max(0, t.repeat_extra_tokens - post);
+      var caption = t.compaction_source
+        ? '<p class="dim">压缩点 ' + (t.compaction_points || []).length +
+          ' 个（来源 ' + esc(t.compaction_source) + '）：其中压缩恢复 ~' + post +
+          ' token 属压缩恢复协议内合法重读，其余 ~' + tax +
+          ' 才是重读税。extra 总量是重读税下界。</p>'
+        : '<p class="dim">无压缩证据源，未分类；--billed-usage（CLI）/ billed=1（web）可接入账单证据。</p>';
       parts.push("<details><summary>" + badge("warn", "repeat injection") + " " + t.repeats.length +
         " 组 · ~" + t.repeat_extra_tokens + " extra tokens</summary>" +
-        "<table><tr><th>次数</th><th>每次~tokens</th><th>多付</th><th>内容</th></tr>" + rrows + "</table>" +
-        '<p class="dim">同一份工具结果（≥200 字符）被多次读入 = 状态未外置的可见信号。</p></details>');
+        "<table><tr><th>次数</th><th>每次~tokens</th><th>多付</th><th>分类</th><th>内容</th></tr>" +
+        rrows + "</table>" + caption + "</details>");
     }
     return "<section><h2>token governance " + helpDot("tokens") + "</h2>" + parts.join("") + "</section>";
   }
