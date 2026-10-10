@@ -175,3 +175,93 @@ def _synthesize_child(child_id, parent_tool_call_id, rows, decrypt, source):
             if usage is not None:
                 emit(seq, ts, ref, "UsageRecord", usage)
     return events, failures
+
+
+def _query_children(conn, parent_session_id):
+    return conn.execute(_CHILDREN_SQL, (parent_session_id,)).fetchall()
+
+
+def _query_rows(conn, child_id):
+    return conn.execute(_ROWS_SQL, (child_id,)).fetchall()
+
+
+def _claimed_tool_ids(session):
+    claimed = set()
+    for event in session.events:
+        ref = event.ref or {}
+        tool_use_id = ref.get("parent_tool_use_id")
+        if tool_use_id:
+            claimed.add(tool_use_id)
+    for meta in session.subagent_meta.values():
+        tool_use_id = meta.get("toolUseId")
+        if tool_use_id:
+            claimed.add(tool_use_id)
+    return claimed
+
+
+def _unavailable(reason, path=None):
+    return {"available": False, "reason": reason,
+            "db_path": str(path) if path is not None else ""}
+
+
+def attach_ide_db(session, source_path, db_path=None):
+    """Attach IDE DB subagent chains to ``session`` (opt-in, never raises).
+
+    Reads direct child sessions of the root session from the SharedClientCache
+    ``local.db`` and appends synthesized events to ``session.events``. On any
+    failure the session is left untouched and ``session.ide_db_stats`` records
+    why (unavailable). Returns None; the caller reads ``session.ide_db_stats``.
+    """
+    session_uuid = billing.session_uuid_from_source(source_path)
+    if session_uuid is None:
+        session.ide_db_stats = _unavailable("not a qoder session")
+        return
+    path = Path(db_path if db_path is not None else billing.DEFAULT_DB_PATH)
+    if not path.is_file():
+        session.ide_db_stats = _unavailable("db not found: %s" % path, path)
+        return
+    decrypt = _resolve_decryptor()
+    if decrypt is None:
+        session.ide_db_stats = _unavailable(
+            "no decryption backend (cryptography or openssl)", path)
+        return
+
+    conn = None
+    try:
+        conn = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)
+        children = _query_children(conn, session_uuid)
+        claimed = _claimed_tool_ids(session)
+        staged = []
+        decrypt_failures = 0
+        skipped = 0
+        rows_read = 0
+        synthesized = 0
+        for child_id, parent_tool_call_id in children:
+            if parent_tool_call_id in claimed:
+                skipped += 1
+                continue
+            child_rows = _query_rows(conn, child_id)
+            source = session.directory / ("ide-db-%s.jsonl" % child_id)
+            events, failures = _synthesize_child(
+                child_id, parent_tool_call_id, child_rows, decrypt, source)
+            decrypt_failures += failures
+            rows_read += len(child_rows)
+            synthesized += 1
+            staged.extend(events)
+    except sqlite3.Error as exc:
+        session.ide_db_stats = _unavailable(str(exc), path)
+        return
+    finally:
+        if conn is not None:
+            conn.close()
+
+    session.events.extend(staged)
+    session.ide_db_stats = {
+        "available": True,
+        "db_path": str(path),
+        "children_found": len(children),
+        "synthesized": synthesized,
+        "rows": rows_read,
+        "decrypt_failures": decrypt_failures,
+        "skipped_already_joined": skipped,
+    }

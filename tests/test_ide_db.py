@@ -1,13 +1,21 @@
 import base64
 import json
+import shutil
+import sqlite3
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
 from agent_session_detective import ide_db
-from agent_session_detective.wire import Event
+from agent_session_detective.wire import Event, Session, load_session
 
+from tests.test_ir_dispatch import _clock, assistant_record, user_record
+
+ROOT_UUID = "3b241101-e2bb-4255-8caf-4136c566a962"
 KID_UUID = "1b6099f1-205a-4757-8528-d6aa9a1450e2"
+KID_UUID_2 = "2c7099f1-205a-4757-8528-d6aa9a1450e3"
+FIXTURES = Path(__file__).parent / "fixtures"
 
 PLAINTEXT_ASSISTANT = {"role": "assistant", "content": "hello from ide-db",
                        "reasoning_content": "", "tool_calls": []}
@@ -189,6 +197,205 @@ class SynthesizeChildTests(unittest.TestCase):
             Path("/tmp/ide-db.jsonl"))
         self.assertEqual([e.seq for e in events], [1, 2])
         self.assertEqual([e.ts for e in events], [1754709632.658, 1754709632.659])
+
+
+def row(row_id, role, content=None, request_id="req-1",
+        token_info=None, gmt_create=1754709632658):
+    return (row_id, role, content, request_id, token_info, gmt_create)
+
+
+def make_db(path, children=(), messages=()):
+    conn = sqlite3.connect(str(path))
+    conn.execute("CREATE TABLE chat_session ("
+                 "session_id TEXT PRIMARY KEY, parent_session_id TEXT, "
+                 "parent_tool_call_id TEXT, session_type TEXT)")
+    conn.execute("CREATE TABLE chat_message ("
+                 "id INTEGER PRIMARY KEY, session_id TEXT, role TEXT, "
+                 "content TEXT, request_id TEXT, token_info TEXT, "
+                 "gmt_create INTEGER)")
+    for kid_id, parent_tool, session_type in children:
+        conn.execute("INSERT INTO chat_session VALUES (?, ?, ?, ?)",
+                     (kid_id, ROOT_UUID, parent_tool, session_type))
+    for session_id, message in messages:
+        conn.execute("INSERT INTO chat_message VALUES (?, ?, ?, ?, ?, ?, ?)",
+                     (message[0], session_id, message[1], message[2],
+                      message[3], message[4], message[5]))
+    conn.commit()
+    conn.close()
+
+
+def write_main_transcript(path, tool_id="call_00A"):
+    clock = _clock()
+    records = [
+        user_record(clock(), "m1", "kick off"),
+        assistant_record(clock(), "m2",
+                         tool_use=(tool_id, "Agent", {"subagent_type": "code",
+                                                      "description": "spawned worker"}),
+                         request_id="req-1", parent="m1"),
+    ]
+    path.write_text("\n".join(json.dumps(r) for r in records) + "\n",
+                    encoding="utf-8")
+
+
+class AttachIdeDbTests(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.base = Path(self._tmp.name)
+
+    def _transcript(self):
+        path = self.base / (ROOT_UUID + ".jsonl")
+        write_main_transcript(path)
+        return path
+
+    def test_non_qoder_source_is_unavailable(self):
+        source = self.base / "plain.jsonl"
+        session = Session(directory=self.base)
+        ide_db.attach_ide_db(session, source)
+        self.assertEqual(session.ide_db_stats, {
+            "available": False, "reason": "not a qoder session", "db_path": ""})
+
+    def test_missing_db_is_unavailable_with_the_path(self):
+        source = self._transcript()
+        session = load_session(source)
+        before = len(session.events)
+        missing = self.base / "absent.db"
+        with patch.object(ide_db, "_resolve_decryptor",
+                          return_value=identity_decryptor):
+            ide_db.attach_ide_db(session, source, missing)
+        self.assertEqual(session.ide_db_stats, {
+            "available": False, "reason": "db not found: %s" % missing,
+            "db_path": str(missing)})
+        self.assertEqual(len(session.events), before)
+
+    def test_no_backend_is_unavailable(self):
+        source = self._transcript()
+        db = self.base / "local.db"
+        make_db(db)
+        session = load_session(source)
+        with patch.object(ide_db, "_resolve_decryptor", return_value=None):
+            ide_db.attach_ide_db(session, source, db)
+        self.assertEqual(session.ide_db_stats, {
+            "available": False,
+            "reason": "no decryption backend (cryptography or openssl)",
+            "db_path": str(db)})
+
+    def test_attaches_children_with_exact_stats(self):
+        source = self._transcript()
+        db = self.base / "local.db"
+        payload = {"role": "assistant", "content": "hello", "reasoning_content": "",
+                   "tool_calls": []}
+        make_db(db,
+                children=[(KID_UUID, "call_00A", "agent_sub_custom")],
+                messages=[(KID_UUID, row(1, "assistant", coded(payload), "req-1",
+                                         json.dumps({"prompt_tokens": 5,
+                                                     "completion_tokens": 1,
+                                                     "cached_tokens": 0})))])
+        session = load_session(source)
+        before = len(session.events)
+        with patch.object(ide_db, "_resolve_decryptor",
+                          return_value=identity_decryptor):
+            ide_db.attach_ide_db(session, source, db)
+
+        self.assertEqual(session.ide_db_stats, {
+            "available": True, "db_path": str(db), "children_found": 1,
+            "synthesized": 1, "rows": 1, "decrypt_failures": 0,
+            "skipped_already_joined": 0})
+        new = session.events[before:]
+        self.assertEqual([e.type for e in new], ["ContentPart", "UsageRecord"])
+        for event in new:
+            self.assertEqual(event.origin, "subagent:ide-db:" + KID_UUID)
+            self.assertEqual(event.source,
+                             source.parent / ("ide-db-%s.jsonl" % KID_UUID))
+            self.assertEqual(event.ref["parent_tool_use_id"], "call_00A")
+
+    def test_children_claimed_by_disk_records_are_skipped(self):
+        source = self._transcript()
+        session = load_session(source)
+        session.events.append(Event(None, "ToolResult", {}, "main", source, 9,
+                                    {"parent_tool_use_id": "call_00A"}))
+        db = self.base / "local.db"
+        payload = {"role": "assistant", "content": "hello", "reasoning_content": "",
+                   "tool_calls": []}
+        make_db(db,
+                children=[(KID_UUID, "call_00A", "agent_sub_custom")],
+                messages=[(KID_UUID, row(1, "assistant", coded(payload)))])
+        before = len(session.events)
+        with patch.object(ide_db, "_resolve_decryptor",
+                          return_value=identity_decryptor):
+            ide_db.attach_ide_db(session, source, db)
+
+        self.assertEqual(session.ide_db_stats["skipped_already_joined"], 1)
+        self.assertEqual(session.ide_db_stats["synthesized"], 0)
+        self.assertEqual(len(session.events), before)
+
+    def test_children_claimed_by_subagent_meta_are_skipped(self):
+        source = self._transcript()
+        session = load_session(source)
+        session.subagent_meta = {"subagent:x": {"toolUseId": "call_00A"}}
+        db = self.base / "local.db"
+        make_db(db,
+                children=[(KID_UUID, "call_00A", "agent_sub_custom")],
+                messages=[(KID_UUID, row(1, "user",
+                                         coded({"role": "user", "contents": []})))])
+        with patch.object(ide_db, "_resolve_decryptor",
+                          return_value=identity_decryptor):
+            ide_db.attach_ide_db(session, source, db)
+        self.assertEqual(session.ide_db_stats["skipped_already_joined"], 1)
+
+    def test_missing_tables_are_unavailable_not_a_crash(self):
+        source = self._transcript()
+        db = self.base / "empty.db"
+        sqlite3.connect(str(db)).close()
+        session = load_session(source)
+        before = len(session.events)
+        with patch.object(ide_db, "_resolve_decryptor",
+                          return_value=identity_decryptor):
+            ide_db.attach_ide_db(session, source, db)
+        stats = session.ide_db_stats
+        self.assertFalse(stats["available"])
+        self.assertIn("chat_session", stats["reason"])
+        self.assertEqual(len(session.events), before)
+
+    def test_corrupt_db_file_never_raises(self):
+        source = self._transcript()
+        db = self.base / "broken.db"
+        db.write_bytes(b"definitely not a sqlite db")
+        session = load_session(source)
+        with patch.object(ide_db, "_resolve_decryptor",
+                          return_value=identity_decryptor):
+            ide_db.attach_ide_db(session, source, db)
+        self.assertFalse(session.ide_db_stats["available"])
+
+    def test_mid_query_failure_drops_staged_events_and_stays_unavailable(self):
+        source = self._transcript()
+        db = self.base / "local.db"
+        payload = {"role": "assistant", "content": "hi", "reasoning_content": "",
+                   "tool_calls": []}
+        make_db(db,
+                children=[(KID_UUID, "call_00A", "agent_sub_custom"),
+                          (KID_UUID_2, "call_00B", "agent_sub_custom")],
+                messages=[(KID_UUID, row(1, "assistant", coded(payload)))])
+        session = load_session(source)
+        before = len(session.events)
+        calls = {"n": 0}
+        real_query_rows = ide_db._query_rows
+
+        def flaky(conn, child_id):
+            calls["n"] += 1
+            if calls["n"] == 2:
+                raise sqlite3.OperationalError("boom")
+            return real_query_rows(conn, child_id)
+
+        with patch.object(ide_db, "_resolve_decryptor",
+                          return_value=identity_decryptor), \
+                patch.object(ide_db, "_query_rows", side_effect=flaky):
+            ide_db.attach_ide_db(session, source, db)
+
+        stats = session.ide_db_stats
+        self.assertFalse(stats["available"])
+        self.assertIn("boom", stats["reason"])
+        self.assertEqual(len(session.events), before)
 
 
 if __name__ == "__main__":
