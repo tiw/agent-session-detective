@@ -230,7 +230,8 @@
     progress.hidden = true;
     auditTitle.textContent = session.workspace.replace(/^wd_/, "") + " · " + session.id.slice(0, 8);
     treeLink.hidden = false;
-    treeLink.href = "/api/tree?path=" + encodeURIComponent(session.path);
+    // always ask for the IDE DB subagent join; a missing DB degrades to plain view
+    treeLink.href = "/api/tree?path=" + encodeURIComponent(session.path) + "&ide_db=1";
     setStatus("ready. " + session.path);
     loadPlaybooks();
   }

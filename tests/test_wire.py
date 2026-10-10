@@ -930,6 +930,18 @@ class SkillLoadRenderTests(unittest.TestCase):
         self.assertIn('"~" + row.cost_tokens_est + " (EST)"', app_js)
         self.assertIn("unavailable", app_js)
 
+    def test_webapp_tree_link_opts_into_the_ide_db_join(self):
+        app_js = (
+            Path(agent_session_detective.__file__).parent / "webapp" / "app.js"
+        ).read_text(encoding="utf-8")
+
+        # the skill-tree entry point must request the join itself; without it
+        # the UI always opens the plain view and shows avoidable orphans
+        self.assertIn(
+            '"/api/tree?path=" + encodeURIComponent(session.path) + "&ide_db=1"',
+            app_js,
+        )
+
 
 class QoderTerminalCliTranscriptTests(unittest.TestCase):
     """The Qoder terminal CLI stores a middleweight transcript under
