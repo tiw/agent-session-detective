@@ -416,8 +416,16 @@ class FleetClassTotalsTests(unittest.TestCase):
             workspace.mkdir()
             shutil.copy(FIXTURES / "ir" / "tier1.jsonl",
                         workspace / (self.BILLING_UUID + ".jsonl"))
-            fleet = web.fleet_stats([str(base)])
-            self.assertIn("repeat_class_totals", fleet)
+            with patch("agent_session_detective.web."
+                       "build_token_stats") as fake_build:
+                fake_build.return_value = TokenStats(
+                    repeat_extra_tokens=300,
+                    repeat_class_totals={
+                        "post_compaction": 22900, "poll": 100})
+                fleet = web.fleet_stats([str(base)])
+            self.assertEqual(fleet["repeat_class_totals"],
+                             {"post_compaction": 22900, "poll": 100})
+            self.assertEqual(fleet["total_repeat_extra_tokens"], 300)
 
 
 class SuggestNextStepsRepeatTests(unittest.TestCase):
