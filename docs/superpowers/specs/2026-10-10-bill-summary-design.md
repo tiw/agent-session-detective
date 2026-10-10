@@ -55,7 +55,7 @@ web.py::run_audit ────┤  serializes everything the bill needs
 bill.py::build_bill(token_stats, skill_loads,   ← new pure module
     subagent_returns, expectations, judgments,     (dicts in, dict out;
     if_results, billed_series, file_read_count,    no IR imports)
-    adapter_id)
+    adapter_id, judge_enabled)
                        │
                        ▼
 app.js::renderBill — card above the summary section
@@ -122,6 +122,10 @@ Per-row rendering contract:
   count, not the timeline.
 - Judge/IF disabled → those lines are omitted **and** one hint line is
   rendered ("judge 未启用，路由账单不完整"), never silently dropped.
+  `run_audit` passes `judge_enabled` (its existing boolean) explicitly:
+  the serialized `judgments` dict (`{"missed": [...], "errors": [...]}`)
+  cannot distinguish judge-off from judge-on-with-zero-missed, and the
+  routing block's `enabled` key must know the difference.
 - All lines off / no expectations → routing block renders the explicit
   "无路由信号" state.
 
