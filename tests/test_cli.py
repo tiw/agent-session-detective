@@ -289,6 +289,55 @@ class BilledUsageFlagTests(unittest.TestCase):
                 note.startswith("billed_usage:")
                 for note in document.coverage.notes))
 
+    def test_billed_usage_feeds_compaction_windows_into_token_stats(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            transcript = base / (BILLING_UUID + ".jsonl")
+            shutil.copy(FIXTURES / "ir" / "tier1.jsonl", transcript)
+            db = base / "local.db"
+            conn = sqlite3.connect(db)
+            conn.execute(
+                "CREATE TABLE chat_message "
+                "(session_id TEXT, gmt_create INTEGER, token_info TEXT)")
+            conn.execute("INSERT INTO chat_message VALUES (?, ?, ?)", (
+                BILLING_UUID, 1754709632658,
+                json.dumps({"prompt_tokens": 100000, "completion_tokens": 40,
+                            "cached_tokens": 80000})))
+            conn.execute("INSERT INTO chat_message VALUES (?, ?, ?)", (
+                BILLING_UUID, 1754709642658,
+                json.dumps({"prompt_tokens": 50000, "completion_tokens": 40,
+                            "cached_tokens": 0})))
+            conn.commit()
+            conn.close()
+
+            with patch("agent_session_detective.billing.DEFAULT_DB_PATH",
+                       str(db)), patch(
+                           "agent_session_detective.cli.render_report",
+                           return_value="<html>report</html>") as render:
+                exit_code = cli.main([
+                    str(transcript), "--no-judge", "--billed-usage",
+                    "--billed-db", str(db)])
+
+            self.assertEqual(exit_code, 0)
+            stats = render.call_args.kwargs["token_stats"]
+            self.assertEqual(stats.compaction_source, "billed")
+            self.assertEqual(len(stats.compaction_points), 1)
+            self.assertEqual(stats.compaction_points[0]["post_prompt"], 50000)
+
+    def test_without_billed_usage_classification_has_no_source(self):
+        with tempfile.TemporaryDirectory() as directory:
+            transcript = Path(directory) / (BILLING_UUID + ".jsonl")
+            shutil.copy(FIXTURES / "ir" / "tier1.jsonl", transcript)
+
+            with patch("agent_session_detective.cli.render_report",
+                       return_value="<html>report</html>") as render:
+                exit_code = cli.main([str(transcript), "--no-judge"])
+
+            self.assertEqual(exit_code, 0)
+            stats = render.call_args.kwargs["token_stats"]
+            self.assertIsNone(stats.compaction_source)
+            self.assertEqual(stats.compaction_points, [])
+
 
 if __name__ == "__main__":
     unittest.main()

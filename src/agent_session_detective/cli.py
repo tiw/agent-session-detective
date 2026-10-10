@@ -9,14 +9,18 @@ import webbrowser
 from pathlib import Path
 from typing import List
 
-from .billing import attach_billed_usage
+from .billing import (
+    attach_billed_usage,
+    billed_compaction_points,
+    session_uuid_from_source,
+)
 from .catalog import load_catalog
 from .if_eval import IFResult, evaluate_playbook
 from .ir import build_analyses, build_audit_document
 from .judge import Judge, judge_session
 from .report import render_report
 from .timeline import build_timeline
-from .tokenstats import build_token_stats
+from .tokenstats import build_token_stats, merge_compaction_windows
 from .tree_html import render_skill_tree
 from .wire import (
     Session,
@@ -160,7 +164,20 @@ def main(argv=None) -> int:
                 evaluate_playbook(judge, Path(playbook), session, gate=args.gate)
             )
 
-    token_stats = build_token_stats(session, timeline)
+    billed_points = []
+    if args.billed_usage:
+        billed_uuid = session_uuid_from_source(session_source)
+        if billed_uuid is not None:
+            billed_points, billed_error = billed_compaction_points(
+                billed_uuid, db_path=args.billed_db)
+            if billed_error:
+                document.coverage.notes.append(
+                    "billed_compaction: unavailable (%s)" % billed_error)
+    compaction_windows, compaction_source = merge_compaction_windows(
+        timeline, billed_points)
+    token_stats = build_token_stats(
+        session, timeline,
+        compaction_windows=compaction_windows, compaction_source=compaction_source)
     if token_stats.usage_records:
         hit = "%.1f%%" % (token_stats.cache_hit_rate * 100) if token_stats.cache_hit_rate is not None else "?"
         print(
