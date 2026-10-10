@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from agent_session_detective import cli
+from agent_session_detective.ir.schema import IR_VERSION
 from agent_session_detective.timeline import build_timeline
 from agent_session_detective.tokenstats import build_token_stats
 from agent_session_detective.web import discover_sessions, fingerprint
@@ -224,7 +225,7 @@ class CodexWebTests(unittest.TestCase):
             os.utime(codex_file, (1234, 1234))
 
             fp = fingerprint(str(codex_file), "test-model")
-            self.assertEqual(fp, "1234.000:12:test-model:v7")
+            self.assertEqual(fp, "1234.000:12:test-model:v8:ir%s" % IR_VERSION)
 
 
 class CodexDiscoveryTests(unittest.TestCase):

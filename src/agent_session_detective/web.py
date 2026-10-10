@@ -18,6 +18,7 @@ from urllib.parse import urlparse, parse_qs
 
 from .catalog import load_catalog
 from .if_eval import IFResult, evaluate_playbook
+from .ir.schema import IR_VERSION
 from .judge import Judge, Judgment, judge_session
 from .timeline import Timeline, build_timeline
 from .tokenstats import BUCKET_KEYS, TokenStats, build_token_stats
@@ -85,7 +86,11 @@ def fingerprint(session_path: str, judge_model: str) -> str:
     # lifecycle cost claim — v5 cached results would render without it.
     # v7 canonicalizes merged skill ids in the skill_loads ledger (IR 1.2),
     # so v6 cached results would carry pre-merge rows.
-    return "%.3f:%d:%s:v7" % (newest, total, judge_model)
+    # v8 appends ir<IR_VERSION> to the key: hand bumps for IR-driven payload
+    # changes (v6, v7) had missed IR 1.3-1.6, so stale cached results kept
+    # being served. From here every IR bump self-invalidates; the counter
+    # stays for web-local payload changes.
+    return "%.3f:%d:%s:v8:ir%s" % (newest, total, judge_model, IR_VERSION)
 
 
 def cache_load(key: str, fp: str) -> Optional[dict]:

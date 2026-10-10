@@ -9,8 +9,10 @@ import urllib.parse
 import urllib.request
 from http.server import ThreadingHTTPServer
 from pathlib import Path
+from unittest.mock import patch
 
 import agent_session_detective.web as web
+from agent_session_detective.ir.schema import IR_VERSION
 from agent_session_detective.web import cache_load, cache_store, discover_sessions, fingerprint
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -53,29 +55,39 @@ class QoderWebTests(unittest.TestCase):
                 },
             )
 
-    def test_fingerprint_uses_v7_for_transcript_file_metadata(self):
+    def test_fingerprint_uses_v8_and_ir_version_for_transcript_file_metadata(self):
         with tempfile.TemporaryDirectory() as directory:
             transcript = Path(directory) / "transcript.jsonl"
             transcript.write_text("hello", encoding="utf-8")
             os.utime(transcript, (1234, 1234))
 
-            self.assertEqual(fingerprint(str(transcript), "test-model"), "1234.000:5:test-model:v7")
+            self.assertEqual(
+                fingerprint(str(transcript), "test-model"),
+                "1234.000:5:test-model:v8:ir%s" % IR_VERSION,
+            )
 
-    def test_v7_fingerprint_invalidates_v6_cached_results(self):
-        # v6 cached results carry the pre-merge skill_loads ledger from
-        # IR 1.2; the key bump must make cache_load miss.
-        v6_fp = "1234.000:5:test-model:v6"
-        v7_fp = "1234.000:5:test-model:v7"
-        result = {"status_line": "stale v6 payload"}
+    def test_an_ir_version_bump_invalidates_cached_results(self):
+        # The motivating bug: IR moved 1.3→1.6 with no manual key bump, so
+        # stale cached results (missing the new evidence blocks) kept being
+        # served. With IR_VERSION in the key, an IR bump invalidates by
+        # itself instead of waiting for a hand bump.
+        with tempfile.TemporaryDirectory() as directory:
+            transcript = Path(directory) / "transcript.jsonl"
+            transcript.write_text("hello", encoding="utf-8")
+            os.utime(transcript, (1234, 1234))
+            result = {"status_line": "payload from the previous IR"}
 
-        original_cache_dir = web.CACHE_DIR
-        web.CACHE_DIR = Path(tempfile.mkdtemp())
-        try:
-            cache_store("k", v6_fp, result)
-            self.assertEqual(cache_load("k", v6_fp), result)
-            self.assertIsNone(cache_load("k", v7_fp))
-        finally:
-            web.CACHE_DIR = original_cache_dir
+            original_cache_dir = web.CACHE_DIR
+            web.CACHE_DIR = Path(tempfile.mkdtemp())
+            try:
+                old_fp = fingerprint(str(transcript), "test-model")
+                cache_store("k", old_fp, result)
+                with patch.object(web, "IR_VERSION", "99.9"):
+                    new_fp = fingerprint(str(transcript), "test-model")
+                self.assertNotEqual(new_fp, old_fp)
+                self.assertIsNone(cache_load("k", new_fp))
+            finally:
+                web.CACHE_DIR = original_cache_dir
 
 
 class SessionDiscoveryScopeTests(unittest.TestCase):
