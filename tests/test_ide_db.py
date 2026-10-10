@@ -398,5 +398,65 @@ class AttachIdeDbTests(unittest.TestCase):
         self.assertEqual(len(session.events), before)
 
 
+class EndToEndJoinTests(unittest.TestCase):
+    def test_ide_db_child_joins_the_dispatch_and_unorphans_it(self):
+        from agent_session_detective.cli import _detect_adapter
+        from agent_session_detective.ir import build_audit_document
+
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            transcript = base / (ROOT_UUID + ".jsonl")
+            write_main_transcript(transcript)
+            db = base / "local.db"
+            user = {"role": "user",
+                    "contents": [{"type": "text", "text": "investigate the bug"}]}
+            assistant = {"role": "assistant", "content": "on it",
+                         "reasoning_content": "", "tool_calls": []}
+            make_db(db,
+                    children=[(KID_UUID, "call_00A", "agent_sub_custom")],
+                    messages=[
+                        (KID_UUID, row(1, "user", coded(user), "req-1")),
+                        (KID_UUID, row(2, "assistant", coded(assistant), "req-1",
+                                      json.dumps({"prompt_tokens": 100,
+                                                  "completion_tokens": 5,
+                                                  "cached_tokens": 60})))])
+            session = load_session(transcript)
+            with patch.object(ide_db, "_resolve_decryptor",
+                              return_value=identity_decryptor):
+                ide_db.attach_ide_db(session, transcript, db)
+            document = build_audit_document(
+                session, _detect_adapter(session, transcript))
+
+        links = document.coverage.dispatch_links
+        self.assertEqual(links["dispatches"], 1)
+        self.assertEqual(links["joined_via_ide_db"], 1)
+        self.assertEqual(links["joined"], 0)
+        self.assertEqual(links["orphan_dispatches"], 0)
+        dispatch = document.dispatches[0]
+        self.assertEqual(dispatch.subagent_agent_id,
+                         "subagent:ide-db:" + KID_UUID)
+        self.assertTrue(document.coverage.notes[-1].startswith("ide_db: attached"))
+
+    def test_flag_off_leaves_the_document_inert(self):
+        from agent_session_detective.cli import _detect_adapter
+        from agent_session_detective.ir import build_audit_document
+
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            transcript = base / (ROOT_UUID + ".jsonl")
+            write_main_transcript(transcript)
+            session = load_session(transcript)
+            document = build_audit_document(
+                session, _detect_adapter(session, transcript))
+
+        self.assertIsNone(session.ide_db_stats)
+        self.assertEqual(document.coverage.ide_db, {})
+        links = document.coverage.dispatch_links
+        self.assertEqual(links["dispatches"], 1)
+        self.assertEqual(links["orphan_dispatches"], 1)
+        self.assertFalse(any(n.startswith("ide_db:")
+                             for n in document.coverage.notes))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -630,5 +630,33 @@ class IdeDbLandingTests(unittest.TestCase):
         self.assertEqual(document.coverage.ide_db, session.ide_db_stats)
 
 
+class IdeDbNoteTests(unittest.TestCase):
+    def test_attached_stats_produce_one_summary_note(self):
+        from agent_session_detective.ir.builder import _notes
+
+        stats = {"available": True, "db_path": "/tmp/local.db",
+                 "children_found": 9, "synthesized": 9, "rows": 415,
+                 "decrypt_failures": 0, "skipped_already_joined": 0}
+        notes = _notes("qoder", {}, stats)
+        self.assertEqual(
+            notes[-1],
+            "ide_db: attached (children=9 synthesized=9 rows=415 "
+            "decrypt_failures=0 skipped_already_joined=0)")
+
+    def test_unavailable_stats_produce_a_reason_note(self):
+        from agent_session_detective.ir.builder import _notes
+
+        notes = _notes("qoder", {}, {"available": False,
+                                     "reason": "not a qoder session",
+                                     "db_path": ""})
+        self.assertEqual(notes[-1], "ide_db: unavailable (not a qoder session)")
+
+    def test_no_stats_means_no_ide_db_note(self):
+        from agent_session_detective.ir.builder import _notes
+
+        notes = _notes("qoder", {}, None)
+        self.assertFalse(any(n.startswith("ide_db:") for n in notes))
+
+
 if __name__ == "__main__":
     unittest.main()

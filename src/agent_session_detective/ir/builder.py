@@ -230,7 +230,8 @@ def _dropped(events) -> Dict[str, int]:
     return counts
 
 
-def _notes(adapter_id: str, tiers: Dict[str, int]) -> List[str]:
+def _notes(adapter_id: str, tiers: Dict[str, int],
+           ide_db_stats: Optional[dict] = None) -> List[str]:
     notes: List[str] = []
     if adapter_id == "qoder":
         # These claims are verified for Qoder transcripts only: other
@@ -250,6 +251,17 @@ def _notes(adapter_id: str, tiers: Dict[str, int]) -> List[str]:
                 "%s: tier 3 (no request identity); records are ungroupable, "
                 "no LLMCall built" % agent_id
             )
+    if ide_db_stats is not None:
+        if ide_db_stats.get("available"):
+            notes.append(
+                "ide_db: attached (children=%d synthesized=%d rows=%d "
+                "decrypt_failures=%d skipped_already_joined=%d)" % (
+                    ide_db_stats["children_found"], ide_db_stats["synthesized"],
+                    ide_db_stats["rows"], ide_db_stats["decrypt_failures"],
+                    ide_db_stats["skipped_already_joined"]))
+        else:
+            notes.append("ide_db: unavailable (%s)"
+                         % ide_db_stats.get("reason"))
     return notes
 
 
@@ -349,7 +361,7 @@ def build_audit_document(session: Session, adapter_id: str) -> AuditDocument:
         ungroupable_records=ungroupable_records,
         extraction=extraction,
         dropped_records=_dropped(session.events),
-        notes=_notes(adapter_id, tiers),
+        notes=_notes(adapter_id, tiers, session.ide_db_stats),
         skill_load_evidence=skill_load_evidence,
         dispatch_links=dispatch_links,
         phase_recognition=phase_recognition,
