@@ -12,7 +12,7 @@ from typing import Dict, List, Optional, Tuple
 
 from .. import __version__ as ASD_VERSION
 
-IR_VERSION = "1.4"
+IR_VERSION = "1.5"
 
 BUCKETS: Tuple[str, ...] = (
     "system",
@@ -265,7 +265,7 @@ class BilledUsage:
     completion_tokens: int
     cached_tokens: int
     rows_total: int        # all chat_message rows seen for the session
-    rows_malformed: int    # rows skipped (missing/unparseable token_info)
+    rows_without_token_info: int    # rows skipped (no parseable token_info, e.g. user/tool turns)
 
 
 @dataclass

@@ -233,7 +233,7 @@ class BilledHeaderTest(unittest.TestCase):
             completion_tokens=120861,
             cached_tokens=13489152,
             rows_total=120,
-            rows_malformed=0,
+            rows_without_token_info=0,
         )
         fields.update(overrides)
         return BilledUsage(**fields)
@@ -248,6 +248,7 @@ class BilledHeaderTest(unittest.TestCase):
         self.assertIn("cached 13489152", out)
         self.assertIn("non-cached 1692777", out)
         self.assertIn("cache-hit 88.9%", out)
+        self.assertIn("rows 120 total, 0 without token_info", out)
         self.assertIn("SharedClientCache chat_message.token_info", out)
 
     def test_document_without_billing_renders_no_billed_block(self):

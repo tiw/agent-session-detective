@@ -209,10 +209,10 @@ def _billed_header_html(document: AuditDocument) -> str:
                if billed.prompt_tokens else "?")
         return ("<div class='meta'>billed (provider): %d requests / prompt %d / "
                 "completion %d / cached %d / non-cached %d / cache-hit %s · "
-                "rows %d total, %d malformed · source %s · db %s</div>" % (
+                "rows %d total, %d without token_info · source %s · db %s</div>" % (
                     billed.requests, billed.prompt_tokens,
                     billed.completion_tokens, billed.cached_tokens, non_cached,
-                    hit, billed.rows_total, billed.rows_malformed,
+                    hit, billed.rows_total, billed.rows_without_token_info,
                     esc(billed.source), esc(billed.db_path)))
     for note in document.coverage.notes:
         if note.startswith("billed_usage: unavailable"):

@@ -89,11 +89,11 @@ class QueryTest(unittest.TestCase):
             self.assertEqual(billed.completion_tokens, 12)
             self.assertEqual(billed.cached_tokens, 100)
             self.assertEqual(billed.rows_total, 2)
-            self.assertEqual(billed.rows_malformed, 0)
+            self.assertEqual(billed.rows_without_token_info, 0)
             self.assertEqual(billed.source, "SharedClientCache chat_message.token_info")
             self.assertEqual(billed.db_path, str(db))
 
-    def test_malformed_rows_are_counted_never_guessed(self):
+    def test_rows_without_token_info_are_counted_never_guessed(self):
         with tempfile.TemporaryDirectory() as directory:
             db = make_db(Path(directory) / "local.db", [
                 (UUID, json.dumps({"prompt_tokens": 100, "completion_tokens": 5,
@@ -105,11 +105,11 @@ class QueryTest(unittest.TestCase):
             self.assertEqual(billed.requests, 1)
             self.assertEqual(billed.prompt_tokens, 100)
             self.assertEqual(billed.rows_total, 3)
-            self.assertEqual(billed.rows_malformed, 2)
+            self.assertEqual(billed.rows_without_token_info, 2)
 
     def test_a_row_missing_one_field_is_skipped_whole(self):
-        # Spec: a malformed row is skipped, so it must contribute nothing —
-        # not even the field it did carry.
+        # A row without parseable token_info is skipped whole: it must
+        # contribute nothing — not even the field it did carry.
         with tempfile.TemporaryDirectory() as directory:
             db = make_db(Path(directory) / "local.db", [
                 (UUID, json.dumps({"prompt_tokens": 100, "completion_tokens": 5,
@@ -122,7 +122,7 @@ class QueryTest(unittest.TestCase):
             self.assertEqual(billed.prompt_tokens, 100)
             self.assertEqual(billed.completion_tokens, 5)
             self.assertEqual(billed.rows_total, 2)
-            self.assertEqual(billed.rows_malformed, 1)
+            self.assertEqual(billed.rows_without_token_info, 1)
 
     def test_zero_rows_raises(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -131,14 +131,14 @@ class QueryTest(unittest.TestCase):
                 query_billed_usage(UUID, db_path=db)
             self.assertIn("no billed rows", ctx.exception.reason)
 
-    def test_all_rows_malformed_raises(self):
+    def test_all_rows_without_token_info_raises(self):
         with tempfile.TemporaryDirectory() as directory:
             db = make_db(Path(directory) / "local.db", [
                 (UUID, json.dumps({"model_key": "auto"})),
             ])
             with self.assertRaises(BillingUnavailable) as ctx:
                 query_billed_usage(UUID, db_path=db)
-            self.assertIn("unparseable", ctx.exception.reason)
+            self.assertIn("lack parseable token_info", ctx.exception.reason)
 
     def test_missing_db_raises(self):
         with self.assertRaises(BillingUnavailable) as ctx:

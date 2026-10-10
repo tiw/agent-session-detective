@@ -120,7 +120,7 @@ def _minimal_document():
 
 class SchemaTest(unittest.TestCase):
     def test_constants(self):
-        self.assertEqual(IR_VERSION, "1.4")
+        self.assertEqual(IR_VERSION, "1.5")
         self.assertEqual(
             BUCKETS,
             ("system", "tools", "user", "inject", "skill", "assistant", "tool"),
@@ -131,7 +131,7 @@ class SchemaTest(unittest.TestCase):
         document = _minimal_document()
         payload = document.to_dict()
         revived = json.loads(json.dumps(payload))
-        self.assertEqual(revived["ir_version"], "1.4")
+        self.assertEqual(revived["ir_version"], "1.5")
         self.assertEqual(revived["adapter"], {"id": "qoder", "version": "1.0"})
         self.assertEqual(revived["requests"][0]["call_id"], "main:0")
         self.assertEqual(revived["items"][0]["bucket"], "user")
@@ -254,7 +254,7 @@ class BilledUsageTest(unittest.TestCase):
             completion_tokens=10,
             cached_tokens=80,
             rows_total=3,
-            rows_malformed=1,
+            rows_without_token_info=1,
         )
         fields.update(overrides)
         return BilledUsage(**fields)
@@ -269,4 +269,4 @@ class BilledUsageTest(unittest.TestCase):
         keys = list(payload.keys())
         self.assertLess(keys.index("billing"), keys.index("ir_version"))
         self.assertEqual(payload["billing"]["prompt_tokens"], 100)
-        self.assertEqual(payload["billing"]["rows_malformed"], 1)
+        self.assertEqual(payload["billing"]["rows_without_token_info"], 1)

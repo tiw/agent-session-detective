@@ -48,7 +48,7 @@ def query_billed_usage(session_uuid: str, db_path=None) -> BilledUsage:
     if not path.is_file():
         raise BillingUnavailable("db not found: %s" % path)
     rows_total = 0
-    rows_malformed = 0
+    rows_without_token_info = 0
     prompt = completion = cached = 0
     try:
         conn = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)
@@ -70,7 +70,7 @@ def query_billed_usage(session_uuid: str, db_path=None) -> BilledUsage:
                     except (TypeError, ValueError, KeyError):
                         # Skipped whole: a row missing one field contributes
                         # none of the others, so the totals stay billed facts.
-                        rows_malformed += 1
+                        rows_without_token_info += 1
                     else:
                         prompt += row[0]
                         completion += row[1]
@@ -82,20 +82,20 @@ def query_billed_usage(session_uuid: str, db_path=None) -> BilledUsage:
     if rows_total == 0:
         raise BillingUnavailable(
             "no billed rows for session %s" % session_uuid)
-    if rows_malformed == rows_total:
+    if rows_without_token_info == rows_total:
         raise BillingUnavailable(
-            "all %d token_info rows unparseable for session %s"
+            "all %d rows lack parseable token_info for session %s"
             % (rows_total, session_uuid))
     return BilledUsage(
         session_id=session_uuid,
         source=SOURCE,
         db_path=str(path),
-        requests=rows_total - rows_malformed,
+        requests=rows_total - rows_without_token_info,
         prompt_tokens=prompt,
         completion_tokens=completion,
         cached_tokens=cached,
         rows_total=rows_total,
-        rows_malformed=rows_malformed,
+        rows_without_token_info=rows_without_token_info,
     )
 
 
