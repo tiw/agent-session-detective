@@ -264,6 +264,26 @@ skill catalog 从 `~/.agents/skills` 和 `~/.kimi/skills` 扫描，可用 `--ski
 
 ---
 
+## 开发记录
+
+### 2026-10-09
+
+| 时间 | 内容 |
+|---|---|
+| 09:57 | **每轮上下文由账单记录重建**：请求完整 prompt（input + cache read + creation）即模型所见上下文，Qoder transcript / Codex 这类只有 usage 记录的格式也能画每轮增长图；同修 subagent 压缩事件泄漏进主 timeline 的 bug |
+| 11:30 | **IR 1.1：skill 加载证据台账 + dispatch 检测**——新增 `ir/loads.py`、`ir/dispatch.py`、`ir/phase_rules.py`，加载证据链与派发链进入中间表示 |
+| 15:16 | **discovery 收紧**：会话发现只认真实会话、拒绝 Qoder terminal CLI transcript；每轮增长图缺席时说明原因而非静默跳过 |
+| 15:40–18:07 | **IR 1.2：actual skill tree 全链路**——从会话事实构建真实 skill 树（裸 id 并入命名空间变体、别名感知加载标记、嵌套派发链、loose agent 子树与孤儿提示），渲染为独立 HTML 页（新增 `ir/skill_tree.py`、`tree_html.py`）；CLI 加 `--tree-out`，Web 加 `GET /api/tree` |
+| 19:27 | tree 页统一为 webapp 暗色主题，来源列表折叠 |
+| 19:56 | **Qoder terminal-cli transcript 降级审计**：经侧栏 discovery 收编，可审计但标注降级 |
+| 20:12 | billed usage 设计 spec（approach A，opt-in flag）+ 实现计划落盘 |
+| 21:46 | **IR 1.3：操作者原话进 IR**，按干预形式（intervention form）分类标注——新增 `ir/intervention.py` |
+| 跨零点 | **billed usage 实现**（10-10 凌晨 00:06–00:19）：IR 加 `BilledUsage` 可选后置字段；`billing.py` 只读 SharedClientCache reader（uuid join）；CLI `--billed-usage` / `--billed-db`；tree 页 header 渲染账单块；`GET /api/tree?billed=1` |
+
+设计文档见 `docs/superpowers/specs/`，实现计划见 `docs/superpowers/plans/`。
+
+---
+
 ## 相关文档
 
 - [需求与设计决策](docs/brainstorms/2026-09-29-agent-skill-audit-requirements.md) —— 为什么这样设计、v1 边界在哪
