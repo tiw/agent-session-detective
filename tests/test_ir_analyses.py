@@ -10,10 +10,12 @@ import unittest
 from pathlib import Path
 
 import agent_session_detective.ir as ir
-from agent_session_detective.ir.analyses import build_analyses
+from agent_session_detective.ir.analyses import build_analyses, subagent_returns
 from agent_session_detective.ir.builder import build_audit_document
 from agent_session_detective.ir.schema import BUCKETS
 from agent_session_detective.wire import load_session
+from tests.ir_helpers import IREventsTestCase
+from tests.test_ir_dispatch import _clock, assistant_record, user_record
 
 FIXTURES = Path(__file__).parent / "fixtures" / "ir"
 ALL_FIXTURES = ["tier1.jsonl", "tier2.jsonl", "tier3.jsonl",
@@ -357,6 +359,177 @@ class CrossFixtureTest(unittest.TestCase):
                           "reason": "short_lived_before_compaction",
                           "inferred": True}]},
         )
+
+
+def result_record(ts, uuid, tool_id, content, parent=None):
+    rec = {"type": "user", "uuid": uuid, "parentUuid": parent,
+           "isSidechain": False, "timestamp": ts,
+           "message": {"content": [
+               {"type": "tool_result", "tool_use_id": tool_id,
+                "content": content}]}}
+    return rec
+
+
+class SubagentReturnsTest(IREventsTestCase, unittest.TestCase):
+    def audit(self, main_lines, subagents=None):
+        document = build_audit_document(
+            self.load_lines(main_lines, subagents=subagents), "qoder")
+        return subagent_returns(document)
+
+    def test_full_join_return_cost_echo_and_ratio(self):
+        clock = _clock()
+        main = [
+            user_record(clock(), "m1", "please investigate the bug"),
+            assistant_record(
+                clock(), "m2",
+                tool_use=("call_00A", "Agent",
+                          {"subagent_type": "code",
+                           "description": "spawned worker"}),
+                request_id="req-1", parent="m1"),
+            result_record(clock(), "m3", "call_00A", "A" * 8004,
+                          parent="m2"),
+            assistant_record(clock(), "m4", "done", request_id="req-2"),
+        ]
+        worker = [
+            user_record(clock(), "w1", "alpha-flow investigate the bug",
+                        parent_tool="call_00A"),
+            assistant_record(
+                clock(), "w2",
+                tool_use=("wread", "Read", {"file_path": "/tmp/bug.txt"}),
+                request_id="req-w1"),
+            result_record(clock(), "w3", "wread", "A" * 8004, parent="w2"),
+            assistant_record(clock(), "w4", "all clear", request_id="req-w2"),
+        ]
+        document = build_audit_document(
+            self.load_lines(main, subagents={"worker": worker}), "qoder")
+        ledger = subagent_returns(document)
+
+        self.assertEqual(len(ledger["rows"]), 1)
+        row = ledger["rows"][0]
+        self.assertEqual(row["dispatch_id"], "main:dispatch:1")
+        self.assertEqual(row["subagent_agent_id"], "subagent:worker")
+        self.assertEqual(row["description"], "spawned worker")
+        self.assertEqual(row["return_tokens_est"], 2001)
+        sub_total = sum(item.tokens_est for item in document.items
+                        if item.agent_id == "subagent:worker")
+        self.assertEqual(row["subagent_tokens_est"], sub_total)
+        echo_item = next(item for item in document.items
+                         if item.agent_id == "subagent:worker"
+                         and item.kind == "tool_result")
+        self.assertEqual(row["echo_item_id"], echo_item.item_id)
+        self.assertEqual(row["ratio"], round(2001 / sub_total, 4))
+        self.assertEqual(row["flagged_reasons"], ["size", "echo"])
+        self.assertEqual(ledger["totals"], {
+            "dispatches": 1, "linked": 1, "return_tokens_total": 2001,
+            "flagged": 1, "process_unavailable": 0})
+
+    def test_orphan_dispatches_have_process_unavailable_and_no_ratio(self):
+        clock = _clock()
+        main = [
+            user_record(clock(), "m1", "go"),
+            assistant_record(
+                clock(), "m2",
+                tool_use=("call_00C", "Agent",
+                          {"subagent_type": "code", "description": "one"}),
+                request_id="req-1", parent="m1"),
+            result_record(clock(), "m3", "call_00C", "A" * 8004,
+                          parent="m2"),
+            assistant_record(
+                clock(), "m4",
+                tool_use=("call_00D", "Agent",
+                          {"subagent_type": "code", "description": "two"}),
+                request_id="req-2", parent="m3"),
+            result_record(clock(), "m5", "call_00D", "ok", parent="m4"),
+            assistant_record(clock(), "m6", "done", request_id="req-3"),
+        ]
+        ledger = self.audit(main)
+
+        self.assertEqual([r["dispatch_id"] for r in ledger["rows"]],
+                         ["main:dispatch:1", "main:dispatch:2"])
+        first, second = ledger["rows"]
+        self.assertIsNone(first["subagent_agent_id"])
+        self.assertEqual(first["return_tokens_est"], 2001)
+        self.assertIsNone(first["subagent_tokens_est"])
+        self.assertIsNone(first["ratio"])
+        self.assertEqual(first["flagged_reasons"], ["size"])
+        self.assertEqual(second["return_tokens_est"], 1)
+        self.assertEqual(second["flagged_reasons"], [])
+        self.assertEqual(ledger["totals"], {
+            "dispatches": 2, "linked": 0, "return_tokens_total": 2002,
+            "flagged": 1, "process_unavailable": 2})
+
+    def test_echo_only_matches_the_linked_subagent(self):
+        clock = _clock()
+        main = [
+            user_record(clock(), "m1", "please investigate"),
+            assistant_record(
+                clock(), "m2",
+                tool_use=("call_00A", "Agent",
+                          {"subagent_type": "code",
+                           "description": "spawned joined"}),
+                request_id="req-1", parent="m1"),
+            result_record(clock(), "m3", "call_00A", "A" * 8004,
+                          parent="m2"),
+            assistant_record(clock(), "m4", "done", request_id="req-2"),
+        ]
+        subagents = {
+            "joined": [
+                user_record(clock(), "j1", "small brief",
+                            parent_tool="call_00A"),
+                assistant_record(clock(), "j2", "small reply",
+                                 request_id="req-j1"),
+            ],
+            # claims a nonexistent parent call: its items exist in the
+            # document but no dispatch row points at it
+            "bystander": [
+                user_record(clock(), "b1", "A" * 8004,
+                            parent_tool="call_missing"),
+            ],
+        }
+        document = build_audit_document(
+            self.load_lines(main, subagents=subagents), "qoder")
+        ledger = subagent_returns(document)
+
+        self.assertEqual(len(ledger["rows"]), 1)
+        row = ledger["rows"][0]
+        self.assertEqual(row["subagent_agent_id"], "subagent:joined")
+        self.assertIsNone(row["echo_item_id"])
+        self.assertEqual(row["flagged_reasons"], ["size"])
+        self.assertEqual(ledger["totals"]["process_unavailable"], 0)
+
+    def test_bloat_threshold_is_inclusive(self):
+        clock = _clock()
+        main = [
+            user_record(clock(), "m1", "go"),
+            assistant_record(
+                clock(), "m2",
+                tool_use=("call_00C", "Agent",
+                          {"subagent_type": "code", "description": "one"}),
+                request_id="req-1", parent="m1"),
+            # "A" * 8000 → estimate_tokens = 2000 → at threshold → flagged
+            result_record(clock(), "m3", "call_00C", "A" * 8000,
+                          parent="m2"),
+            assistant_record(
+                clock(), "m4",
+                tool_use=("call_00D", "Agent",
+                          {"subagent_type": "code", "description": "two"}),
+                request_id="req-2", parent="m3"),
+            # "A" * 7996 → 1999 → below threshold → not flagged
+            result_record(clock(), "m5", "call_00D", "A" * 7996,
+                          parent="m4"),
+        ]
+        ledger = self.audit(main)
+
+        self.assertEqual(ledger["rows"][0]["flagged_reasons"], ["size"])
+        self.assertEqual(ledger["rows"][1]["flagged_reasons"], [])
+
+    def test_session_without_dispatches_returns_empty_ledger(self):
+        ledger = self.audit([user_record(_clock()(), "m1", "hello")])
+
+        self.assertEqual(ledger["rows"], [])
+        self.assertEqual(ledger["totals"], {
+            "dispatches": 0, "linked": 0, "return_tokens_total": 0,
+            "flagged": 0, "process_unavailable": 0})
 
 
 if __name__ == "__main__":

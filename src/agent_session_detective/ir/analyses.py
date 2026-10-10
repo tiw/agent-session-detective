@@ -31,10 +31,15 @@ from __future__ import annotations
 from dataclasses import asdict
 from typing import Dict, List, Set, Tuple
 
-from .schema import AuditDocument
+from .schema import AuditDocument, ContentItem
 from .skill_tree import skill_tree
 
 RE_INJECTION_BUCKETS = ("inject", "skill")
+
+# Return-bloat flagging (P0-1 bill summary): a subagent return at or
+# above this many EST tokens is flagged "size" — the main agent paid
+# for bulk where a summary would have done.
+RETURN_BLOAT_TOKENS = 2000
 
 
 def _item_position(item) -> Tuple[str, int, str]:
@@ -301,6 +306,79 @@ def dispatches(document: AuditDocument) -> dict:
         "links": dict(document.coverage.dispatch_links or {}),
         "phase_recognition": dict(document.coverage.phase_recognition or {}),
     }
+
+
+def subagent_returns(document: AuditDocument) -> dict:
+    """Return-value bloat ledger for subagent dispatches.
+
+    For every dispatch row: the parent-side tool_result tokens (what the
+    main agent actually paid to receive), the subagent's whole-process
+    tokens when its transcript is linked, an echo link (result text
+    appears verbatim inside the subagent process — norm_sha1 equality),
+    and a bloat flag (>= RETURN_BLOAT_TOKENS or an echo). Orphan
+    dispatches keep ``subagent_tokens_est: None`` and count in
+    ``process_unavailable`` — never guessed.
+    """
+    returns_by_tool: Dict[str, ContentItem] = {}
+    for item in document.items:
+        if item.kind == "tool_result" and item.tool_use_id is not None:
+            returns_by_tool.setdefault(item.tool_use_id, item)
+    sub_items: Dict[str, List[ContentItem]] = {}
+    for item in document.items:
+        if item.agent_id.startswith("subagent:"):
+            sub_items.setdefault(item.agent_id, []).append(item)
+    rows = []
+    linked = 0
+    flagged = 0
+    process_unavailable = 0
+    return_total = 0
+    for dispatch in document.dispatches:
+        return_item = returns_by_tool.get(dispatch.tool_use_id)
+        return_tokens = (return_item.tokens_est
+                          if return_item is not None else None)
+        subagent_tokens = None
+        echo_item_id = None
+        if dispatch.subagent_agent_id is not None:
+            linked += 1
+            items = sub_items.get(dispatch.subagent_agent_id) or []
+            if items:
+                subagent_tokens = sum(item.tokens_est for item in items)
+                if return_item is not None:
+                    for item in items:
+                        if item.norm_sha1 == return_item.norm_sha1:
+                            echo_item_id = item.item_id
+                            break
+            else:
+                process_unavailable += 1
+        else:
+            process_unavailable += 1
+        ratio = (round(return_tokens / subagent_tokens, 4)
+                 if return_tokens and subagent_tokens else None)
+        reasons = []
+        if return_tokens is not None and return_tokens >= RETURN_BLOAT_TOKENS:
+            reasons.append("size")
+        if echo_item_id is not None:
+            reasons.append("echo")
+        if reasons:
+            flagged += 1
+        if return_tokens is not None:
+            return_total += return_tokens
+        rows.append({
+            "dispatch_id": dispatch.dispatch_id,
+            "subagent_agent_id": dispatch.subagent_agent_id,
+            "description": dispatch.description,
+            "return_item_id": (return_item.item_id
+                               if return_item is not None else None),
+            "return_tokens_est": return_tokens,
+            "subagent_tokens_est": subagent_tokens,
+            "echo_item_id": echo_item_id,
+            "ratio": ratio,
+            "flagged_reasons": reasons,
+        })
+    return {"rows": rows, "totals": {
+        "dispatches": len(document.dispatches), "linked": linked,
+        "return_tokens_total": return_total, "flagged": flagged,
+        "process_unavailable": process_unavailable}}
 
 
 def build_analyses(document: AuditDocument) -> dict:
