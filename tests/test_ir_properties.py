@@ -16,7 +16,8 @@ FIXTURES = Path(__file__).parent / "fixtures" / "ir"
 ALL_FIXTURES = ["tier1.jsonl", "tier2.jsonl", "tier3.jsonl",
                 "tier3-usage.jsonl", "compaction.jsonl",
                 "reinject.jsonl", "attachments.jsonl", "calibration.jsonl",
-                "dispatch.jsonl", "skill-identity.jsonl"]
+                "dispatch.jsonl", "skill-identity.jsonl",
+                "interventions.jsonl"]
 
 
 def build(name):
@@ -131,6 +132,8 @@ class CoverageLedgerTest(unittest.TestCase):
         # main + three tier-1 subagent transcripts, each grouped by anchor
         "dispatch.jsonl": (4, 0, 0),
         "skill-identity.jsonl": (1, 0, 0),
+        # tier-1 main plus one tier-2 sidechain (requestId only)
+        "interventions.jsonl": (1, 1, 0),
     }
     CHECKED_CALLS = {
         "tier1.jsonl": 3,
@@ -144,6 +147,8 @@ class CoverageLedgerTest(unittest.TestCase):
         # three main spans + one span per subagent transcript
         "dispatch.jsonl": 6,
         "skill-identity.jsonl": 6,
+        # five main spans; the tier-2 sidechain span is unchecked
+        "interventions.jsonl": 5,
     }
 
     def test_coverage_reconciles_with_the_document_ledger(self):

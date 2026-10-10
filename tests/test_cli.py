@@ -181,7 +181,7 @@ class IrCliTests(unittest.TestCase):
             self.assertEqual(exit_code, 0)
             document = json.loads(ir_path.read_text(encoding="utf-8"))
             self.assertEqual(document["adapter"]["id"], "qoder")
-            self.assertEqual(document["ir_version"], "1.5")
+            self.assertEqual(document["ir_version"], "1.6")
             self.assertEqual(
                 [call["call_id"] for call in document["requests"]],
                 ["main:0", "main:1", "main:2"],

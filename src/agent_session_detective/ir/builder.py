@@ -263,6 +263,7 @@ def build_audit_document(session: Session, adapter_id: str) -> AuditDocument:
     for agent in agents:
         agent_extraction = extract_items(agent.records, agent.agent_id)
         extraction.items.extend(agent_extraction.items)
+        extraction.interventions.extend(agent_extraction.interventions)
         extraction.listing_lines.update(agent_extraction.listing_lines)
         extraction.envelope += agent_extraction.envelope
         extraction.signature += agent_extraction.signature
@@ -366,4 +367,5 @@ def build_audit_document(session: Session, adapter_id: str) -> AuditDocument:
         skill_loads=skill_loads,
         dispatches=dispatches,
         phases=phases,
+        interventions=extraction.interventions,
     )

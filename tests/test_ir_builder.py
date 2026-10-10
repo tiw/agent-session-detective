@@ -246,7 +246,7 @@ class Tier1GoldenTest(unittest.TestCase):
                 "qoder: prefix_hashes are not exposed by the transcript; left null",
             ],
         )
-        self.assertEqual(document.ir_version, "1.5")
+        self.assertEqual(document.ir_version, "1.6")
         self.assertEqual(document.adapter, {"id": "qoder", "version": "1.0"})
         self.assertEqual(document.estimator_version, "cjk-1.0")
         self.assertEqual(
@@ -502,6 +502,78 @@ class AliveItemsHelperTest(unittest.TestCase):
             [item.item_id for item in alive_items_for_call(compacted.items, second)],
             ["main:4:0", "main:5:0"],
         )
+
+
+class InterventionWiringTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.document = build("interventions.jsonl")
+
+    def test_main_user_messages_carry_interventions(self):
+        self.assertEqual(
+            [
+                (
+                    iv.item_id,
+                    iv.label,
+                    iv.rule,
+                    iv.evidence,
+                    list(iv.carriers),
+                    iv.lead_sha1,
+                )
+                for iv in self.document.interventions
+            ],
+            [
+                (
+                    "main:1:0",
+                    "confirm",
+                    "acknowledgement",
+                    "开始落地",
+                    [],
+                    "4f1bd19d16f262dee9265586c09a9bbbe87fefb1",
+                ),
+                (
+                    "main:3:0",
+                    "unclassified",
+                    "unclassified",
+                    "",
+                    [],
+                    "d2c33e2fe87f69356f03045893609a974d3e14af",
+                ),
+                (
+                    "main:5:0",
+                    "unclassified",
+                    "unclassified",
+                    "",
+                    ["command"],
+                    "e03c9ddf92a50054cf5bdbbbd6233d139f866482",
+                ),
+            ],
+        )
+
+    def test_injected_skill_and_sidechain_turns_get_no_intervention(self):
+        document = self.document
+        by_id = {item.item_id: item for item in document.items}
+        self.assertEqual(by_id["main:7:0"].kind, "compact_summary")
+        self.assertEqual(by_id["main:9:0"].kind, "skill_body")
+        sidechain_item = by_id["sidechain:s1:11:0"]
+        self.assertEqual(
+            (sidechain_item.agent_id, sidechain_item.bucket, sidechain_item.kind),
+            ("sidechain:s1", "user", "user_message"),
+        )
+        self.assertEqual(
+            sorted(iv.item_id for iv in document.interventions),
+            ["main:1:0", "main:3:0", "main:5:0"],
+        )
+
+    def test_every_intervention_joins_a_main_user_message_item(self):
+        document = self.document
+        by_id = {item.item_id: item for item in document.items}
+        for iv in document.interventions:
+            item = by_id[iv.item_id]
+            self.assertEqual(
+                (item.agent_id, item.bucket, item.kind),
+                ("main", "user", "user_message"),
+            )
 
 
 if __name__ == "__main__":

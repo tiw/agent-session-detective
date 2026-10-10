@@ -12,6 +12,7 @@ from agent_session_detective.ir.schema import (
     ContentItem,
     ContextAgent,
     CoverageReport,
+    Intervention,
     ItemRef,
     LLMCall,
     Observation,
@@ -120,7 +121,7 @@ def _minimal_document():
 
 class SchemaTest(unittest.TestCase):
     def test_constants(self):
-        self.assertEqual(IR_VERSION, "1.5")
+        self.assertEqual(IR_VERSION, "1.6")
         self.assertEqual(
             BUCKETS,
             ("system", "tools", "user", "inject", "skill", "assistant", "tool"),
@@ -131,7 +132,7 @@ class SchemaTest(unittest.TestCase):
         document = _minimal_document()
         payload = document.to_dict()
         revived = json.loads(json.dumps(payload))
-        self.assertEqual(revived["ir_version"], "1.5")
+        self.assertEqual(revived["ir_version"], "1.6")
         self.assertEqual(revived["adapter"], {"id": "qoder", "version": "1.0"})
         self.assertEqual(revived["requests"][0]["call_id"], "main:0")
         self.assertEqual(revived["items"][0]["bucket"], "user")
@@ -165,6 +166,7 @@ class SchemaTest(unittest.TestCase):
                 "dispatches",
                 "estimator_version",
                 "generator",
+                "interventions",
                 "ir_version",
                 "items",
                 "phases",
@@ -270,3 +272,36 @@ class BilledUsageTest(unittest.TestCase):
         self.assertLess(keys.index("billing"), keys.index("ir_version"))
         self.assertEqual(payload["billing"]["prompt_tokens"], 100)
         self.assertEqual(payload["billing"]["rows_without_token_info"], 1)
+
+
+class InterventionTest(unittest.TestCase):
+    def test_interventions_default_to_empty(self):
+        self.assertEqual(_minimal_document().interventions, [])
+
+    def test_intervention_serializes_between_phases_and_billing(self):
+        document = _minimal_document()
+        document.interventions.append(
+            Intervention(
+                item_id="main:1:0",
+                label="confirm",
+                rule="acknowledgement",
+                evidence="开始落地",
+                carriers=[],
+                lead_sha1="4f1bd19d16f262dee9265586c09a9bbbe87fefb1",
+            )
+        )
+        payload = document.to_dict()
+        keys = list(payload.keys())
+        self.assertLess(keys.index("phases"), keys.index("interventions"))
+        self.assertLess(keys.index("interventions"), keys.index("billing"))
+        self.assertEqual(
+            payload["interventions"][0],
+            {
+                "item_id": "main:1:0",
+                "label": "confirm",
+                "rule": "acknowledgement",
+                "evidence": "开始落地",
+                "carriers": [],
+                "lead_sha1": "4f1bd19d16f262dee9265586c09a9bbbe87fefb1",
+            },
+        )

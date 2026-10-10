@@ -12,7 +12,7 @@ from typing import Dict, List, Optional, Tuple
 
 from .. import __version__ as ASD_VERSION
 
-IR_VERSION = "1.5"
+IR_VERSION = "1.6"
 
 BUCKETS: Tuple[str, ...] = (
     "system",
@@ -248,6 +248,24 @@ class PhaseEntity:
 
 
 @dataclass
+class Intervention:
+    """One operator-intervention verdict for a main-agent user message (IR 1.6).
+
+    Exactly one row per main-agent ``user_message`` item, including
+    ``unclassified`` residue rows. ``lead_sha1`` is sha1 of the
+    carrier-stripped lead — the distinct-lead dedup key; ``rule`` names the
+    cascade rule that fired (verbatim evidence, empty for residue).
+    """
+
+    item_id: str
+    label: str
+    rule: str
+    evidence: str
+    carriers: List[str]
+    lead_sha1: str
+
+
+@dataclass
 class BilledUsage:
     """Provider-billed token totals (opt-in side-channel, attached post-build).
 
@@ -282,6 +300,7 @@ class AuditDocument:
     skill_loads: List[LoadEvidence] = field(default_factory=list)
     dispatches: List[Dispatch] = field(default_factory=list)
     phases: List[PhaseEntity] = field(default_factory=list)
+    interventions: List[Intervention] = field(default_factory=list)
     # Opt-in side-channel: attached post-build, never produced by the
     # builder; null = not requested, or unavailable (see coverage.notes).
     billing: Optional[BilledUsage] = None

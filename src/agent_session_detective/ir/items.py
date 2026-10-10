@@ -24,8 +24,9 @@ from typing import Dict, List, Optional, Tuple
 
 from ..timeline import SKILL_CONTENT_RE, SKILL_FILE_RE
 from .estimator import estimate
+from .intervention import classify, strip_carriers
 from .records import WireRecord
-from .schema import UNATTRIBUTED, ContentItem
+from .schema import UNATTRIBUTED, ContentItem, Intervention
 
 BASE_DIRECTORY_RE = re.compile(r"Base directory for this skill:\s*(\S+)")
 LISTING_LINE_RE = re.compile(r"^- (.+?): ")
@@ -107,6 +108,7 @@ class Extraction:
     signature: int = 0
     conflicts: int = 0
     human_text_dropped: int = 0
+    interventions: List[Intervention] = field(default_factory=list)
 
 
 def extract_items(records: List[WireRecord], agent_id: str) -> Extraction:
@@ -211,8 +213,26 @@ def extract_items(records: List[WireRecord], agent_id: str) -> Extraction:
                         skill_id=signature[0], name=signature[1], by_signature=True,
                         human_text=human_text)
                 else:
-                    add(record, "user", "user_message", text, "qoder:user",
-                        human_text=human_text)
+                    item = add(record, "user", "user_message", text, "qoder:user",
+                               human_text=human_text)
+                    # Classified here because the full text only exists here
+                    # (preview truncates). Main-agent turns only: injected
+                    # bodies and sidechain briefs are not operator keystrokes.
+                    if agent_id == "main" and texts:
+                        matched = classify(text)
+                        lead_sha1 = hashlib.sha1(
+                            strip_carriers(text).lead.encode("utf-8")
+                        ).hexdigest()
+                        extraction.interventions.append(
+                            Intervention(
+                                item_id=item.item_id,
+                                label=matched.label,
+                                rule=matched.rule,
+                                evidence=matched.evidence,
+                                carriers=list(matched.carriers),
+                                lead_sha1=lead_sha1,
+                            )
+                        )
             elif event.type == "ToolResult":
                 return_value = event.payload.get("return_value") or {}
                 output = return_value.get("output")
