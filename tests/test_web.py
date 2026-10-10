@@ -9,6 +9,7 @@ import urllib.parse
 import urllib.request
 from http.server import ThreadingHTTPServer
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import agent_session_detective.web as web
@@ -336,6 +337,110 @@ class CacheKeyTests(unittest.TestCase):
                 "judge_triggers": False}
         self.assertNotEqual(web.cache_key(base),
                             web.cache_key({**base, "billed": True}))
+
+
+class RunAuditBilledTests(unittest.TestCase):
+    BILLING_UUID = "3b241101-e2bb-4255-8caf-4136c566a962"
+
+    def _sawtooth_db(self, path):
+        conn = sqlite3.connect(path)
+        conn.execute(
+            "CREATE TABLE chat_message "
+            "(session_id TEXT, gmt_create INTEGER, token_info TEXT)")
+        conn.execute("INSERT INTO chat_message VALUES (?, ?, ?)", (
+            self.BILLING_UUID, 1754709632658,
+            json.dumps({"prompt_tokens": 100000, "completion_tokens": 40,
+                        "cached_tokens": 80000})))
+        conn.execute("INSERT INTO chat_message VALUES (?, ?, ?)", (
+            self.BILLING_UUID, 1754709642658,
+            json.dumps({"prompt_tokens": 50000, "completion_tokens": 40,
+                        "cached_tokens": 0})))
+        conn.commit()
+        conn.close()
+
+    def _transcript(self, directory):
+        transcript = Path(directory) / (self.BILLING_UUID + ".jsonl")
+        transcript.write_text(
+            '{"type": "context.append_loop_event", "event": '
+            '{"type": "tool.call", "toolCallId": "c1", "name": "Read", '
+            '"args": {"path": "a"}}}\n'
+            '{"type": "context.append_loop_event", "event": '
+            '{"type": "tool.result", "toolCallId": "c1", "result": '
+            '{"output": "hello world"}}}\n',
+            encoding="utf-8")
+        return transcript
+
+    def test_billed_audit_classifies_repeats(self):
+        with tempfile.TemporaryDirectory() as directory:
+            db = Path(directory) / "local.db"
+            self._sawtooth_db(db)
+            transcript = self._transcript(directory)
+            original_cache_dir = web.CACHE_DIR
+            web.CACHE_DIR = Path(tempfile.mkdtemp())
+            try:
+                with patch("agent_session_detective.billing.DEFAULT_DB_PATH",
+                           str(db)):
+                    job = web.Job({"path": str(transcript), "billed": True})
+                    web.run_audit(job)
+                self.assertEqual(job.status, "done")
+                stats = job.result["token_stats"]
+                self.assertEqual(stats["compaction_source"], "billed")
+                self.assertEqual(len(stats["compaction_points"]), 1)
+                self.assertEqual(stats["compaction_points"][0]["post_prompt"],
+                                 50000)
+            finally:
+                web.CACHE_DIR = original_cache_dir
+
+    def test_audit_without_billed_has_no_compaction_source(self):
+        with tempfile.TemporaryDirectory() as directory:
+            transcript = self._transcript(directory)
+            original_cache_dir = web.CACHE_DIR
+            web.CACHE_DIR = Path(tempfile.mkdtemp())
+            try:
+                job = web.Job({"path": str(transcript)})
+                web.run_audit(job)
+                self.assertEqual(job.status, "done")
+                stats = job.result["token_stats"]
+                self.assertIsNone(stats["compaction_source"])
+            finally:
+                web.CACHE_DIR = original_cache_dir
+
+
+class FleetClassTotalsTests(unittest.TestCase):
+    BILLING_UUID = "3b241101-e2bb-4255-8caf-4136c566a962"
+
+    def test_fleet_payload_carries_repeat_class_totals(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            workspace = base / "ws"
+            workspace.mkdir()
+            shutil.copy(FIXTURES / "ir" / "tier1.jsonl",
+                        workspace / (self.BILLING_UUID + ".jsonl"))
+            fleet = web.fleet_stats([str(base)])
+            self.assertIn("repeat_class_totals", fleet)
+
+
+class SuggestNextStepsRepeatTests(unittest.TestCase):
+    def _timeline(self):
+        return SimpleNamespace(file_reads=[], loads=[])
+
+    def test_with_source_splits_legal_rereads_from_tax(self):
+        token_stats = TokenStats(
+            repeat_extra_tokens=23000,
+            repeat_class_totals={"post_compaction": 22900, "poll": 100},
+            compaction_source="billed")
+        out = web.suggest_next_steps(self._timeline(), [], [], [], False,
+                                     token_stats)
+        self.assertTrue(any("合法重读" in line for line in out))
+        self.assertTrue(any("真实重读税仅 100" in line for line in out))
+
+    def test_without_source_keeps_the_externalize_message(self):
+        token_stats = TokenStats(
+            repeat_extra_tokens=23000,
+            repeat_class_totals={"unclassified": 23000})
+        out = web.suggest_next_steps(self._timeline(), [], [], [], False,
+                                     token_stats)
+        self.assertTrue(any("状态外置" in line for line in out))
 
 
 if __name__ == "__main__":

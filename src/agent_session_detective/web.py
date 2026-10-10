@@ -21,7 +21,12 @@ from .if_eval import IFResult, evaluate_playbook
 from .ir.schema import IR_VERSION
 from .judge import Judge, Judgment, judge_session
 from .timeline import Timeline, build_timeline
-from .tokenstats import BUCKET_KEYS, TokenStats, build_token_stats
+from .tokenstats import (
+    BUCKET_KEYS,
+    TokenStats,
+    build_token_stats,
+    merge_compaction_windows,
+)
 from .wire import Session, find_latest_session, load_session
 
 WEBAPP_DIR = Path(__file__).parent / "webapp"
@@ -428,6 +433,7 @@ def fleet_stats(roots: Optional[List[str]] = None) -> Dict[str, object]:
         "growth_shapes": {},
         "total_output_tokens": 0,
         "total_repeat_extra_tokens": 0,
+        "repeat_class_totals": {},
     }
     turns_sum = 0
     hit_sum = 0.0
@@ -440,15 +446,20 @@ def fleet_stats(roots: Optional[List[str]] = None) -> Dict[str, object]:
             s["events"] = len(session.events)
             s["skills_loaded"] = len(timeline.loads)
             s["skill_files_read"] = len(timeline.file_reads)
-            stats = build_token_stats(session, timeline)
+            windows, source = merge_compaction_windows(timeline)
+            stats = build_token_stats(
+                session, timeline,
+                compaction_windows=windows, compaction_source=source)
             s["cache_hit_rate"] = stats.cache_hit_rate
             s["growth_verdict"] = stats.growth_verdict
             s["repeat_extra_tokens"] = stats.repeat_extra_tokens
+            s["repeat_class_totals"] = stats.repeat_class_totals
             s["output_total"] = stats.output_total
         except Exception:
             s["turns"] = s["events"] = s["skills_loaded"] = s["skill_files_read"] = None
             s["cache_hit_rate"] = s["growth_verdict"] = None
             s["repeat_extra_tokens"] = s["output_total"] = None
+            s["repeat_class_totals"] = None
         if s["turns"] is None:
             continue
         fleet["sessions"] = fleet["sessions"] + 1
@@ -460,6 +471,9 @@ def fleet_stats(roots: Optional[List[str]] = None) -> Dict[str, object]:
             hit_sum += s["cache_hit_rate"]
         fleet["total_output_tokens"] += s["output_total"] or 0
         fleet["total_repeat_extra_tokens"] += s["repeat_extra_tokens"] or 0
+        for cls, extra in (s["repeat_class_totals"] or {}).items():
+            fleet["repeat_class_totals"][cls] = \
+                fleet["repeat_class_totals"].get(cls, 0) + extra
     if fleet["sessions"]:
         fleet["avg_turns"] = round(turns_sum / fleet["sessions"], 1)
     if fleet["with_usage"]:
@@ -526,10 +540,19 @@ def suggest_next_steps(
                 % token_stats.hash_flips
             )
         if token_stats.repeat_extra_tokens >= 5000:
-            out.append(
-                "重复注入约 %d token: 同一份工具结果被多次读入，考虑状态外置 + 派生摘要"
-                % token_stats.repeat_extra_tokens
-            )
+            post = (token_stats.repeat_class_totals or {}).get(
+                "post_compaction", 0)
+            tax = token_stats.repeat_extra_tokens - post
+            if tax < 5000 and token_stats.compaction_source:
+                out.append(
+                    "重复注入 %d token 属压缩恢复协议内合法重读: 真实重读税仅 %d"
+                    % (token_stats.repeat_extra_tokens, tax)
+                )
+            else:
+                out.append(
+                    "重复注入约 %d token: 同一份工具结果被多次读入，考虑状态外置 + 派生摘要"
+                    % token_stats.repeat_extra_tokens
+                )
         if token_stats.growth_verdict.startswith("accelerat"):
             out.append("每轮 token 增量在加速: 优先落地边界合同（派发传指针、回收收签收单）")
     if not timeline.loads and not timeline.file_reads:
@@ -609,7 +632,18 @@ def run_audit(job: Job) -> None:
                 job.mark("evaluating instruction following: %s" % Path(playbook).name)
                 if_results.append(evaluate_playbook(judge, Path(playbook), session))
         job.mark("deriving next steps")
-        token_stats = build_token_stats(session, timeline)
+        billed_points = []
+        if job.params.get("billed"):
+            from .billing import billed_compaction_points, session_uuid_from_source
+            billed_uuid = session_uuid_from_source(source_path)
+            if billed_uuid is not None:
+                billed_points, billed_error = billed_compaction_points(billed_uuid)
+                if billed_error:
+                    job.mark("billed_compaction unavailable: %s" % billed_error)
+        compaction_windows, compaction_source = merge_compaction_windows(timeline, billed_points)
+        token_stats = build_token_stats(
+            session, timeline,
+            compaction_windows=compaction_windows, compaction_source=compaction_source)
         # The IR document is built here so the result carries the
         # evidence-backed load ledger (IR 1.1) — the web layer previously
         # imported no IR.
