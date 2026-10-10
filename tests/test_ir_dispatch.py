@@ -409,9 +409,9 @@ class BriefClassificationTest(IREventsTestCase, unittest.TestCase):
         self.assertEqual(observation.channel, "qoder:signature:skill_body")
         self.assertEqual(brief.phase_id, "demo")
 
-    def test_ir_version_is_1_6(self):
-        self.assertEqual(IR_VERSION, "1.6")
-        self.assertEqual(audit(self).ir_version, "1.6")
+    def test_ir_version_is_1_7(self):
+        self.assertEqual(IR_VERSION, "1.7")
+        self.assertEqual(audit(self).ir_version, "1.7")
 
 
 class PhaseTierTest(IREventsTestCase, unittest.TestCase):

@@ -69,6 +69,9 @@ class QoderTranscriptTests(unittest.TestCase):
             "billable": None,
         })
 
+    def test_session_starts_with_no_ide_db_stats(self):
+        self.assertIsNone(self.session.ide_db_stats)
+
     def test_preserves_timestamp_source_and_jsonl_line_numbers(self):
         if not self.session.events:
             self.fail("Qoder transcript produced no events")

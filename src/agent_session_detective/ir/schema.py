@@ -12,7 +12,7 @@ from typing import Dict, List, Optional, Tuple
 
 from .. import __version__ as ASD_VERSION
 
-IR_VERSION = "1.6"
+IR_VERSION = "1.7"
 
 BUCKETS: Tuple[str, ...] = (
     "system",
@@ -178,6 +178,9 @@ class CoverageReport:
     intervention_evidence: dict = field(default_factory=dict)
     # IR 1.6: native operator-keystroke stamps shipped vs withheld.
     human_text_evidence: dict = field(default_factory=dict)
+    # IR 1.7: IDE-DB subagent-chain attach stats (verbatim from the
+    # side-channel; {} when the opt-in flag is off).
+    ide_db: dict = field(default_factory=dict)
 
 
 @dataclass

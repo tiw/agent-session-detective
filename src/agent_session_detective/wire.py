@@ -101,6 +101,9 @@ class Session:
     # origin ("subagent:<stem>"). Malformed or missing files are counted as
     # RecordDropped events, never guessed.
     subagent_meta: Dict[str, dict] = field(default_factory=dict)
+    # Qoder IDE only: attach stats from the SharedClientCache subagent-chain
+    # side-channel (None when the opt-in flag is off).
+    ide_db_stats: Optional[dict] = None
 
     def turns(self) -> List[Event]:
         return [e for e in self.events if e.type == "TurnBegin"]

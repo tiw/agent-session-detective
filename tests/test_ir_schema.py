@@ -121,7 +121,7 @@ def _minimal_document():
 
 class SchemaTest(unittest.TestCase):
     def test_constants(self):
-        self.assertEqual(IR_VERSION, "1.6")
+        self.assertEqual(IR_VERSION, "1.7")
         self.assertEqual(
             BUCKETS,
             ("system", "tools", "user", "inject", "skill", "assistant", "tool"),
@@ -132,11 +132,15 @@ class SchemaTest(unittest.TestCase):
         document = _minimal_document()
         payload = document.to_dict()
         revived = json.loads(json.dumps(payload))
-        self.assertEqual(revived["ir_version"], "1.6")
+        self.assertEqual(revived["ir_version"], "1.7")
         self.assertEqual(revived["adapter"], {"id": "qoder", "version": "1.0"})
         self.assertEqual(revived["requests"][0]["call_id"], "main:0")
         self.assertEqual(revived["items"][0]["bucket"], "user")
         self.assertEqual(revived["skills"][0]["observations"][0]["kind"], "listing")
+
+    def test_coverage_gains_an_empty_ide_db_block(self):
+        payload = _minimal_document().to_dict()
+        self.assertEqual(payload["coverage"]["ide_db"], {})
 
     def test_human_text_defaults_to_none_and_round_trips(self):
         payload = _minimal_document().to_dict()
