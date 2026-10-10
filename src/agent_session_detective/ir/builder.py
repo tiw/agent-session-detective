@@ -354,6 +354,7 @@ def build_audit_document(session: Session, adapter_id: str) -> AuditDocument:
         dispatch_links=dispatch_links,
         phase_recognition=phase_recognition,
         skill_identity=skill_identity,
+        ide_db=session.ide_db_stats,
     )
     return AuditDocument(
         adapter={"id": adapter_id, "version": ADAPTER_VERSION},

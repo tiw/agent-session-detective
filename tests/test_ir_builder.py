@@ -619,5 +619,16 @@ class HumanTextWiringTest(IREventsTestCase, unittest.TestCase):
         self.assertEqual([item.agent_id for item in stamped], ["main"])
 
 
+class IdeDbLandingTests(unittest.TestCase):
+    def test_session_ide_db_stats_land_in_the_coverage_block(self):
+        session = load_session(FIXTURES / "tier1.jsonl")
+        session.ide_db_stats = {
+            "available": True, "db_path": "/tmp/local.db", "children_found": 2,
+            "synthesized": 2, "rows": 40, "decrypt_failures": 0,
+            "skipped_already_joined": 0}
+        document = build_audit_document(session, "qoder")
+        self.assertEqual(document.coverage.ide_db, session.ide_db_stats)
+
+
 if __name__ == "__main__":
     unittest.main()
