@@ -238,5 +238,36 @@ class InterventionEvidenceTest(unittest.TestCase):
         })
 
 
+class HumanTextEvidenceTest(unittest.TestCase):
+    NOTE = ("stamped counts shipped items carrying the raw humanInput text; "
+            "dropped_non_main counts non-main TurnBegin records whose "
+            "humanInput text was withheld from the stamp (the parent agent's "
+            "Task brief must not read as operator keystrokes)")
+
+    def test_stamps_are_re_derived_and_drops_pass_through(self):
+        stamped = item("main:1:0", "user_message", "qoder:user")
+        stamped.human_text = "/goal 制定计划"
+        report = coverage(
+            [],
+            [stamped, item("main:3:0", "user_message", "qoder:user")],
+            extraction=Extraction(human_text_dropped=2),
+        )
+
+        self.assertEqual(report.human_text_evidence, {
+            "stamped": 1,
+            "dropped_non_main": 2,
+            "note": self.NOTE,
+        })
+
+    def test_empty_extraction_reports_a_zero_block(self):
+        report = coverage([], [])
+
+        self.assertEqual(report.human_text_evidence, {
+            "stamped": 0,
+            "dropped_non_main": 0,
+            "note": self.NOTE,
+        })
+
+
 if __name__ == "__main__":
     unittest.main()

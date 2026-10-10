@@ -176,6 +176,8 @@ class CoverageReport:
     skill_identity: dict = field(default_factory=dict)
     # IR 1.6: distinct-lead intervention counts, re-derived from the rows.
     intervention_evidence: dict = field(default_factory=dict)
+    # IR 1.6: native operator-keystroke stamps shipped vs withheld.
+    human_text_evidence: dict = field(default_factory=dict)
 
 
 @dataclass

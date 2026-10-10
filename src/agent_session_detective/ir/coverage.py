@@ -80,6 +80,26 @@ def _intervention_evidence(interventions: List[Intervention]) -> dict:
     }
 
 
+def _human_text_evidence(items: List[ContentItem], dropped_non_main: int) -> dict:
+    """Native operator keystrokes: stamps that shipped vs drops at extraction.
+
+    ``stamped`` is re-derived from the document's items. ``dropped_non_main``
+    is the extraction-time counter: a withheld stamp is indistinguishable from
+    a turn that never had one, by design — the text (the parent agent's Task
+    brief) is what must not read as operator keystrokes.
+    """
+    stamped = sum(1 for item in items if item.human_text is not None)
+    return {
+        "stamped": stamped,
+        "dropped_non_main": dropped_non_main,
+        "note": ("stamped counts shipped items carrying the raw humanInput "
+                 "text; dropped_non_main counts non-main TurnBegin records "
+                 "whose humanInput text was withheld from the stamp (the "
+                 "parent agent's Task brief must not read as operator "
+                 "keystrokes)"),
+    }
+
+
 def build_coverage(
     calls: List[LLMCall],
     items: List[ContentItem],
@@ -130,4 +150,7 @@ def build_coverage(
         phase_recognition=phase_recognition or {},
         skill_identity=skill_identity or {},
         intervention_evidence=_intervention_evidence(extraction.interventions),
+        human_text_evidence=_human_text_evidence(
+            items, extraction.human_text_dropped
+        ),
     )

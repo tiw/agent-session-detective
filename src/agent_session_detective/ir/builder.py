@@ -268,6 +268,7 @@ def build_audit_document(session: Session, adapter_id: str) -> AuditDocument:
         extraction.envelope += agent_extraction.envelope
         extraction.signature += agent_extraction.signature
         extraction.conflicts += agent_extraction.conflicts
+        extraction.human_text_dropped += agent_extraction.human_text_dropped
         for record in agent.records:
             seq_ts[(record.source, record.seq)] = record.ts
         tiers[agent.agent_id] = detect_tier(agent.records)

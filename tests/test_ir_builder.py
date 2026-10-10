@@ -7,6 +7,7 @@ from agent_session_detective.ir.builder import (
     build_audit_document,
 )
 from agent_session_detective.wire import load_session
+from tests.ir_helpers import IREventsTestCase
 
 FIXTURES = Path(__file__).parent / "fixtures" / "ir"
 
@@ -45,6 +46,19 @@ def parts(call):
 
 def item_states(document):
     return {item.item_id: item.gone_seq for item in document.items}
+
+
+def human_record(uuid, typed, expanded):
+    """A Qoder IDE turn: humanInput.text is what the operator typed, while
+    message.content is the harness expansion sent to the model."""
+    return {
+        "type": "user",
+        "uuid": uuid,
+        "timestamp": "2026-10-09T08:00:00.000Z",
+        "origin": {"kind": "human"},
+        "humanInput": {"text": typed, "mode": "prompt"},
+        "message": {"content": expanded},
+    }
 
 
 class Tier1GoldenTest(unittest.TestCase):
@@ -583,6 +597,26 @@ class InterventionWiringTest(unittest.TestCase):
         self.assertEqual(evidence["residue"], 2)
         self.assertEqual(evidence["residue_rate"], "2/3")
         self.assertEqual(evidence["label_conflicts"], [])
+
+
+class HumanTextWiringTest(IREventsTestCase, unittest.TestCase):
+    def test_non_main_drops_survive_the_agent_merge(self):
+        """Subagent files arrive on the human-input channel too, carrying the
+        parent agent's Task brief; ir.items withholds the stamp and counts the
+        drop, and the builder's per-agent merge must carry that count into the
+        document — otherwise the drop silently disappears again."""
+        brief = "Search breadth: very thorough."
+        session = self.load_lines(
+            [human_record("m1", "/goal 制定计划", "A goal has been set.")],
+            subagents={"probe": [human_record("s1", brief, brief)]},
+        )
+        document = build_audit_document(session, "qoder")
+
+        evidence = document.coverage.human_text_evidence
+        self.assertEqual(evidence["stamped"], 1)
+        self.assertEqual(evidence["dropped_non_main"], 1)
+        stamped = [item for item in document.items if item.human_text is not None]
+        self.assertEqual([item.agent_id for item in stamped], ["main"])
 
 
 if __name__ == "__main__":
