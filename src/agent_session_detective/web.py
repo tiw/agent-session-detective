@@ -609,7 +609,11 @@ def render_tree_page(session_path: str, billed: bool = False, ide_db: bool = Fal
     if billed:
         from .billing import attach_billed_usage
         attach_billed_usage(document, source_path)
-    return render_skill_tree(document)
+    hint = None
+    if not ide_db:
+        from .ide_db import suggest_ide_db_hint
+        hint = suggest_ide_db_hint(session, source_path, document)
+    return render_skill_tree(document, ide_db_hint=hint)
 
 
 def run_audit(job: Job) -> None:
