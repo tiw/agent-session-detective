@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from agent_session_detective import cli
+from agent_session_detective import ide_db
 from agent_session_detective.wire import Event, Session
 
 
@@ -337,6 +338,79 @@ class BilledUsageFlagTests(unittest.TestCase):
             stats = render.call_args.kwargs["token_stats"]
             self.assertIsNone(stats.compaction_source)
             self.assertEqual(stats.compaction_points, [])
+
+
+class IdeDbFlagTests(unittest.TestCase):
+    def _write_fixture(self, base):
+        transcript = base / (BILLING_UUID + ".jsonl")
+        shutil.copy(FIXTURES / "ir" / "tier1.jsonl", transcript)
+        return transcript
+
+    def test_ide_db_flag_attaches_the_chain_from_the_given_db(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            transcript = self._write_fixture(base)
+            db = base / "local.db"
+            conn = sqlite3.connect(str(db))
+            conn.execute("CREATE TABLE chat_session ("
+                         "session_id TEXT PRIMARY KEY, parent_session_id TEXT, "
+                         "parent_tool_call_id TEXT, session_type TEXT)")
+            conn.execute("CREATE TABLE chat_message ("
+                         "id INTEGER PRIMARY KEY, session_id TEXT, role TEXT, "
+                         "content TEXT, request_id TEXT, token_info TEXT, "
+                         "gmt_create INTEGER)")
+            conn.commit()
+            conn.close()
+
+            with patch.object(ide_db, "_resolve_decryptor",
+                              return_value=lambda blob: blob.decode("utf-8")), \
+                    patch("agent_session_detective.cli.render_report",
+                          return_value="<html>report</html>") as render:
+                code = cli.main([str(transcript), "--no-judge", "--ide-db",
+                                 "--ide-db-path", str(db),
+                                 "--ir-out", str(base / "ir.json")])
+
+            self.assertEqual(code, 0)
+            document = render.call_args.kwargs["document"]
+            self.assertEqual(document.coverage.ide_db, {
+                "available": True, "db_path": str(db), "children_found": 0,
+                "synthesized": 0, "rows": 0, "decrypt_failures": 0,
+                "skipped_already_joined": 0})
+            self.assertTrue(document.coverage.notes[-1].startswith(
+                "ide_db: attached"))
+
+    def test_ide_db_flag_with_a_missing_default_db_notes_unavailable(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            transcript = self._write_fixture(base)
+            with patch("agent_session_detective.billing.DEFAULT_DB_PATH",
+                       str(base / "absent.db")), \
+                    patch("agent_session_detective.cli.render_report",
+                          return_value="<html>report</html>") as render:
+                code = cli.main([str(transcript), "--no-judge", "--ide-db",
+                                 "--ir-out", str(base / "ir.json")])
+
+            self.assertEqual(code, 0)
+            document = render.call_args.kwargs["document"]
+            self.assertFalse(document.coverage.ide_db["available"])
+            self.assertIn("db not found", document.coverage.ide_db["reason"])
+            self.assertTrue(any(n.startswith("ide_db: unavailable")
+                                for n in document.coverage.notes))
+
+    def test_without_the_flag_nothing_attaches(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            transcript = self._write_fixture(base)
+            with patch("agent_session_detective.cli.render_report",
+                       return_value="<html>report</html>") as render:
+                code = cli.main([str(transcript), "--no-judge",
+                                 "--ir-out", str(base / "ir.json")])
+
+            self.assertEqual(code, 0)
+            document = render.call_args.kwargs["document"]
+            self.assertEqual(document.coverage.ide_db, {})
+            self.assertFalse(any(n.startswith("ide_db:")
+                                 for n in document.coverage.notes))
 
 
 if __name__ == "__main__":

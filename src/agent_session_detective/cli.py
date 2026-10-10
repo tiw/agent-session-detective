@@ -15,6 +15,7 @@ from .billing import (
     session_uuid_from_source,
 )
 from .catalog import load_catalog
+from .ide_db import attach_ide_db
 from .if_eval import IFResult, evaluate_playbook
 from .ir import build_analyses, build_audit_document
 from .judge import Judge, judge_session
@@ -70,6 +71,12 @@ def main(argv=None) -> int:
     parser.add_argument("--billed-db", default=None, metavar="PATH",
                         help="Billed-usage DB path (default: Qoder SharedClientCache "
                              "local.db).")
+    parser.add_argument("--ide-db", action="store_true",
+                        help="Attach IDE-channel subagent chains from the local "
+                             "SharedClientCache DB (opt-in; Qoder transcripts only).")
+    parser.add_argument("--ide-db-path", default=None, metavar="PATH",
+                        help="IDE subagent DB path (default: Qoder SharedClientCache "
+                             "local.db).")
     parser.add_argument("--open", action="store_true", help="Open the report in a browser.")
     parser.add_argument("--no-judge", action="store_true", help="Skip LLM trigger judging.")
     parser.add_argument("--expect", default=None,
@@ -124,6 +131,8 @@ def main(argv=None) -> int:
     if not session.events:
         print("No events parsed from %s" % session_source, file=sys.stderr)
         return 1
+    if args.ide_db:
+        attach_ide_db(session, session_source, args.ide_db_path)
 
     # The document is always built: the report renders the evidence-backed
     # load section from it. --ir-out/--ir-analyses keep serializing it
