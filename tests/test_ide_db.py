@@ -54,6 +54,20 @@ class DecryptLadderTests(unittest.TestCase):
         raw = coded(PLAINTEXT_ASSISTANT)
         self.assertIsNone(ide_db._decrypt_row(raw, boom))
 
+    def test_decryptor_raising_oserror_decrypts_to_none(self):
+        def boom(blob):
+            raise FileNotFoundError("openssl vanished")
+
+        raw = coded(PLAINTEXT_ASSISTANT)
+        self.assertIsNone(ide_db._decrypt_row(raw, boom))
+
+    def test_decryptor_raising_import_error_decrypts_to_none(self):
+        def boom(blob):
+            raise ImportError("broken cryptography install")
+
+        raw = coded(PLAINTEXT_ASSISTANT)
+        self.assertIsNone(ide_db._decrypt_row(raw, boom))
+
     def test_real_ciphertext_decrypts_with_the_resolved_backend(self):
         decrypt = ide_db._resolve_decryptor()
         if decrypt is None:
@@ -114,6 +128,18 @@ class SynthesizeChildTests(unittest.TestCase):
         self.assertEqual(events[0].type, "TurnBegin")
         self.assertEqual(events[0].payload["user_input"],
                          [{"type": "text", "text": "do the thing"}])
+
+    def test_user_row_with_plaintext_content_falls_back(self):
+        decoded = {"role": "user", "content": "brief without contents"}
+        rows = [(1, "user", coded(decoded), "req-2", None, 1754709632658)]
+        events, failures = ide_db._synthesize_child(
+            KID_UUID, "call_00A", rows, identity_decryptor,
+            Path("/tmp/ide-db.jsonl"))
+        self.assertEqual(failures, 0)
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0].type, "TurnBegin")
+        self.assertEqual(events[0].payload["user_input"],
+                         [{"type": "text", "text": "brief without contents"}])
 
     def test_user_row_with_no_text_parts_emits_nothing(self):
         decoded = {"role": "user", "contents": [{"type": "image", "data": "x"}]}

@@ -60,7 +60,8 @@ def _openssl_decrypt(blob):
 
 def _resolve_decryptor():
     try:
-        import cryptography  # noqa: F401
+        from cryptography.hazmat.primitives.ciphers import (  # noqa: F401
+            Cipher, algorithms, modes)
     except ImportError:
         pass
     else:
@@ -79,7 +80,7 @@ def _decrypt_row(raw, decrypt):
         if isinstance(data, bytes):
             data = data.decode("utf-8")
         payload = json.loads(data)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OSError, ImportError):
         return None
     return payload if isinstance(payload, dict) else None
 
@@ -136,6 +137,10 @@ def _synthesize_child(child_id, parent_tool_call_id, rows, decrypt, source):
                 failures += 1
         elif role == "user":
             parts = _text_parts(decoded)
+            if not parts:
+                text = decoded.get("content")
+                if isinstance(text, str) and text:
+                    parts = [{"type": "text", "text": text}]
             if parts:
                 emit(seq, ts, ref, "TurnBegin", {"user_input": parts})
         elif role == "assistant":
