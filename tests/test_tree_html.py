@@ -265,5 +265,18 @@ class BilledHeaderTest(unittest.TestCase):
         self.assertIn("billed_usage: unavailable", out)
 
 
+class IdeDbFooterTests(unittest.TestCase):
+    def test_zero_joins_keep_the_footer_without_the_segment(self):
+        out = page(agents=[agent(MAIN)])
+        self.assertNotIn("joined via ide-db", out)
+
+    def test_positive_joins_render_the_segment(self):
+        doc = document([agent(MAIN)],
+                       dispatches=[dispatch("main:dispatch:1", MAIN, CHILD, "code")])
+        doc.coverage.dispatch_links["joined_via_ide_db"] = 2
+        out = render_skill_tree(doc)
+        self.assertIn("joined via ide-db 2", out)
+
+
 if __name__ == "__main__":
     unittest.main()

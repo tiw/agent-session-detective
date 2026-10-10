@@ -95,9 +95,11 @@ def _footer(document: AuditDocument) -> str:
             "(counted without rows)") % (
                 n_loads, n_reloads, n_unavailable,
                 evidence.get("redundant_bodies", 0))
-    text += (" · dispatches %d / joined via records %d / joined via meta.json "
+    text += (" · dispatches %d / joined via records %d%s / joined via meta.json "
              "only %d / orphan dispatches %d") % (
                  links.get("dispatches", 0), links.get("joined", 0),
+                 (" / joined via ide-db %d" % links["joined_via_ide_db"]
+                  if links.get("joined_via_ide_db", 0) else ""),
                  links.get("joined_via_meta_only", 0),
                  links.get("orphan_dispatches", 0))
     text += " · phase tiers A/B/C %d/%d/%d" % (
