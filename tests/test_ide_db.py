@@ -458,5 +458,209 @@ class EndToEndJoinTests(unittest.TestCase):
                              for n in document.coverage.notes))
 
 
+class SuggestIdeDbHintTests(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.base = Path(self._tmp.name)
+
+    def _session_and_document(self, transcript):
+        from agent_session_detective.cli import _detect_adapter
+        from agent_session_detective.ir import build_audit_document
+
+        session = load_session(transcript)
+        document = build_audit_document(
+            session, _detect_adapter(session, transcript))
+        return session, document
+
+    def test_orphan_with_resolvable_children_returns_the_hint(self):
+        transcript = self.base / (ROOT_UUID + ".jsonl")
+        write_main_transcript(transcript)
+        db = self.base / "local.db"
+        make_db(db, children=[(KID_UUID, "call_00A", "agent_sub_custom")])
+        session, document = self._session_and_document(transcript)
+
+        with patch.object(ide_db, "_resolve_decryptor",
+                          return_value=identity_decryptor):
+            hint = ide_db.suggest_ide_db_hint(session, transcript, document,
+                                              db)
+
+        self.assertIn("1 orphan dispatch can be resolved", hint)
+        self.assertIn("--ide-db", hint)
+        self.assertIn("&ide_db=1", hint)
+
+    def test_hint_text_is_render_safe(self):
+        transcript = self.base / (ROOT_UUID + ".jsonl")
+        write_main_transcript(transcript)
+        db = self.base / "local.db"
+        make_db(db, children=[(KID_UUID, "call_00A", "agent_sub_custom")])
+        session, document = self._session_and_document(transcript)
+
+        with patch.object(ide_db, "_resolve_decryptor",
+                          return_value=identity_decryptor):
+            hint = ide_db.suggest_ide_db_hint(session, transcript, document,
+                                              db)
+
+        for forbidden in ("<script", "http://", "https://", "src=", "href=",
+                          "url("):
+            self.assertNotIn(forbidden, hint)
+
+    def test_plural_count_comes_from_the_orphan_intersection(self):
+        from types import SimpleNamespace
+
+        transcript = self.base / (ROOT_UUID + ".jsonl")
+        write_main_transcript(transcript)
+        session = load_session(transcript)
+        document = SimpleNamespace(dispatches=[
+            SimpleNamespace(tool_use_id="call_00A", subagent_agent_id=None),
+            SimpleNamespace(tool_use_id="call_00B", subagent_agent_id=None)])
+        db = self.base / "local.db"
+        make_db(db, children=[(KID_UUID, "call_00A", "agent_sub_custom"),
+                              (KID_UUID_2, "call_00B", "agent_sub_custom")])
+
+        with patch.object(ide_db, "_resolve_decryptor",
+                          return_value=identity_decryptor):
+            hint = ide_db.suggest_ide_db_hint(session, transcript, document,
+                                              db)
+
+        self.assertIn("2 orphan dispatches can be resolved", hint)
+
+    def test_non_qoder_source_returns_none(self):
+        transcript = self.base / "plain.jsonl"
+        write_main_transcript(transcript)
+        db = self.base / "local.db"
+        make_db(db, children=[(KID_UUID, "call_00A", "agent_sub_custom")])
+        session, document = self._session_and_document(transcript)
+
+        with patch.object(ide_db, "_resolve_decryptor",
+                          return_value=identity_decryptor):
+            hint = ide_db.suggest_ide_db_hint(session, transcript, document,
+                                              db)
+
+        self.assertIsNone(hint)
+
+    def test_missing_db_returns_none(self):
+        transcript = self.base / (ROOT_UUID + ".jsonl")
+        write_main_transcript(transcript)
+        session, document = self._session_and_document(transcript)
+        missing = self.base / "absent.db"
+
+        with patch.object(ide_db, "_resolve_decryptor",
+                          return_value=identity_decryptor):
+            hint = ide_db.suggest_ide_db_hint(session, transcript, document,
+                                              missing)
+
+        self.assertIsNone(hint)
+
+    def test_no_decryption_backend_returns_none(self):
+        transcript = self.base / (ROOT_UUID + ".jsonl")
+        write_main_transcript(transcript)
+        db = self.base / "local.db"
+        make_db(db, children=[(KID_UUID, "call_00A", "agent_sub_custom")])
+        session, document = self._session_and_document(transcript)
+
+        with patch.object(ide_db, "_resolve_decryptor", return_value=None):
+            hint = ide_db.suggest_ide_db_hint(session, transcript, document,
+                                              db)
+
+        self.assertIsNone(hint)
+
+    def test_child_claimed_by_disk_records_returns_none(self):
+        transcript = self.base / (ROOT_UUID + ".jsonl")
+        write_main_transcript(transcript)
+        db = self.base / "local.db"
+        make_db(db, children=[(KID_UUID, "call_00A", "agent_sub_custom")])
+        session, document = self._session_and_document(transcript)
+        session.events.append(Event(None, "ToolResult", {}, "main", transcript,
+                                    9, {"parent_tool_use_id": "call_00A"}))
+
+        with patch.object(ide_db, "_resolve_decryptor",
+                          return_value=identity_decryptor):
+            hint = ide_db.suggest_ide_db_hint(session, transcript, document,
+                                              db)
+
+        self.assertIsNone(hint)
+
+    def test_child_without_a_matching_orphan_returns_none(self):
+        transcript = self.base / (ROOT_UUID + ".jsonl")
+        write_main_transcript(transcript)
+        db = self.base / "local.db"
+        make_db(db, children=[(KID_UUID, "call_00B", "agent_sub_custom")])
+        session, document = self._session_and_document(transcript)
+
+        with patch.object(ide_db, "_resolve_decryptor",
+                          return_value=identity_decryptor):
+            hint = ide_db.suggest_ide_db_hint(session, transcript, document,
+                                              db)
+
+        self.assertIsNone(hint)
+
+    def test_no_orphans_returns_none(self):
+        from types import SimpleNamespace
+
+        transcript = self.base / (ROOT_UUID + ".jsonl")
+        write_main_transcript(transcript)
+        session = load_session(transcript)
+        document = SimpleNamespace(dispatches=[
+            SimpleNamespace(tool_use_id="call_00A",
+                            subagent_agent_id="subagent:x"),
+            SimpleNamespace(tool_use_id="", subagent_agent_id=None)])
+        db = self.base / "local.db"
+        make_db(db, children=[(KID_UUID, "call_00A", "agent_sub_custom")])
+
+        with patch.object(ide_db, "_resolve_decryptor",
+                          return_value=identity_decryptor):
+            hint = ide_db.suggest_ide_db_hint(session, transcript, document,
+                                              db)
+
+        self.assertIsNone(hint)
+
+    def test_corrupt_db_returns_none_without_raising(self):
+        transcript = self.base / (ROOT_UUID + ".jsonl")
+        write_main_transcript(transcript)
+        db = self.base / "broken.db"
+        db.write_bytes(b"definitely not a sqlite db")
+        session, document = self._session_and_document(transcript)
+
+        with patch.object(ide_db, "_resolve_decryptor",
+                          return_value=identity_decryptor):
+            hint = ide_db.suggest_ide_db_hint(session, transcript, document,
+                                              db)
+
+        self.assertIsNone(hint)
+
+    def test_db_without_ide_tables_returns_none(self):
+        transcript = self.base / (ROOT_UUID + ".jsonl")
+        write_main_transcript(transcript)
+        db = self.base / "empty.db"
+        sqlite3.connect(str(db)).close()
+        session, document = self._session_and_document(transcript)
+
+        with patch.object(ide_db, "_resolve_decryptor",
+                          return_value=identity_decryptor):
+            hint = ide_db.suggest_ide_db_hint(session, transcript, document,
+                                              db)
+
+        self.assertIsNone(hint)
+
+    def test_probe_never_modifies_the_session(self):
+        transcript = self.base / (ROOT_UUID + ".jsonl")
+        write_main_transcript(transcript)
+        db = self.base / "local.db"
+        make_db(db, children=[(KID_UUID, "call_00A", "agent_sub_custom")])
+        session, document = self._session_and_document(transcript)
+        events_before = list(session.events)
+
+        with patch.object(ide_db, "_resolve_decryptor",
+                          return_value=identity_decryptor):
+            hint = ide_db.suggest_ide_db_hint(session, transcript, document,
+                                              db)
+
+        self.assertIsNotNone(hint)
+        self.assertIsNone(session.ide_db_stats)
+        self.assertEqual(session.events, events_before)
+        self.assertEqual(session.subagent_meta, {})
+
+
 if __name__ == "__main__":
     unittest.main()

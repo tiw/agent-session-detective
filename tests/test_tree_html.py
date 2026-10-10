@@ -278,5 +278,24 @@ class IdeDbFooterTests(unittest.TestCase):
         self.assertIn("joined via ide-db 2", out)
 
 
+class IdeDbHintRenderTests(unittest.TestCase):
+    HINT = ("1 orphan dispatch can be resolved via the Qoder IDE DB subagent "
+            "chain; rerun with --ide-db (CLI) or add &ide_db=1 to the web "
+            "tree URL.")
+
+    def test_hint_is_rendered_as_a_notice(self):
+        out = render_skill_tree(document(agents=[agent(MAIN)]),
+                                ide_db_hint=self.HINT)
+        self.assertIn("class='notice'", out)
+        self.assertIn("--ide-db", out)
+        self.assertIn("&amp;ide_db=1", out)
+        self.assertNotIn("&ide_db=1", out)
+
+    def test_default_render_carries_no_hint(self):
+        out = page(agents=[agent(MAIN)])
+        self.assertNotIn("ide_db=1", out)
+        self.assertNotIn("can be resolved", out)
+
+
 if __name__ == "__main__":
     unittest.main()

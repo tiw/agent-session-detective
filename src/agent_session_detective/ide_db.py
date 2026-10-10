@@ -265,3 +265,40 @@ def attach_ide_db(session, source_path, db_path=None):
         "decrypt_failures": decrypt_failures,
         "skipped_already_joined": skipped,
     }
+
+
+def suggest_ide_db_hint(session, source_path, document, db_path=None):
+    """Read-only probe: would --ide-db resolve any current orphan dispatch?
+
+    Never raises and never touches the session; returns a render-safe hint
+    string or None.
+    """
+    orphan_ids = {d.tool_use_id for d in document.dispatches
+                  if d.subagent_agent_id is None and d.tool_use_id}
+    if not orphan_ids:
+        return None
+    session_uuid = billing.session_uuid_from_source(source_path)
+    if session_uuid is None:
+        return None
+    path = Path(db_path if db_path is not None else billing.DEFAULT_DB_PATH)
+    if not path.is_file():
+        return None
+    if _resolve_decryptor() is None:
+        return None
+    conn = None
+    try:
+        conn = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)
+        resolvable = {tool_id for _child_id, tool_id in
+                      _query_children(conn, session_uuid)
+                      if tool_id not in _claimed_tool_ids(session)}
+    except sqlite3.Error:
+        return None
+    finally:
+        if conn is not None:
+            conn.close()
+    n = len(resolvable & orphan_ids)
+    if n == 0:
+        return None
+    return ("%d orphan dispatch%s can be resolved via the Qoder IDE DB "
+            "subagent chain; rerun with --ide-db (CLI) or add &ide_db=1 to "
+            "the web tree URL." % (n, "" if n == 1 else "es"))

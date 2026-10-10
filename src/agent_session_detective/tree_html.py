@@ -222,7 +222,8 @@ def _billed_header_html(document: AuditDocument) -> str:
     return ""
 
 
-def render_skill_tree(document: AuditDocument) -> str:
+def render_skill_tree(document: AuditDocument,
+                      ide_db_hint: Optional[str] = None) -> str:
     tree = skill_tree(document)
     nodes_by_id = {node["agent_id"]: node for node in tree["nodes"]}
     children: Dict[str, List[dict]] = {}
@@ -294,6 +295,8 @@ def render_skill_tree(document: AuditDocument) -> str:
                                       nodes_by_id, children, orphans,
                                       set(), 0))
     parts.append(_footer(document))
+    if ide_db_hint:
+        parts.append("<div class='notice'>%s</div>" % esc(ide_db_hint))
     parts.append("</main>")
     parts.append("</body>")
     parts.append("</html>")

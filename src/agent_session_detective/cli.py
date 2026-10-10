@@ -17,7 +17,7 @@ from .billing import (
     session_uuid_from_source,
 )
 from .catalog import load_catalog
-from .ide_db import attach_ide_db
+from .ide_db import attach_ide_db, suggest_ide_db_hint
 from .if_eval import IFResult, evaluate_playbook
 from .ir import build_analyses, build_audit_document
 from .judge import Judge, judge_session
@@ -148,7 +148,12 @@ def main(argv=None) -> int:
         _write_json(Path(args.ir_analyses), build_analyses(document))
     if args.tree_out:
         tree_path = Path(args.tree_out)
-        tree_path.write_text(render_skill_tree(document), encoding="utf-8")
+        hint = None
+        if not args.ide_db:
+            hint = suggest_ide_db_hint(
+                session, session_source, document, args.ide_db_path)
+        tree_path.write_text(
+            render_skill_tree(document, ide_db_hint=hint), encoding="utf-8")
         print(tree_path)
 
     timeline = build_timeline(session)
