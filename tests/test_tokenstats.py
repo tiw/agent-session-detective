@@ -2,11 +2,14 @@
 
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 from agent_session_detective.tokenstats import (
     _classify_occurrences,
     _extra_by_class,
     _repeats,
+    build_token_stats,
+    merge_compaction_windows,
 )
 from agent_session_detective.wire import Event
 
@@ -174,3 +177,62 @@ class RepeatsTest(unittest.TestCase):
                   tool_result("c2", BIG, 900.0, 4)]
         repeats, _, _ = _repeats(events, [])
         self.assertIsNone(repeats[0].tool_name)
+
+
+class MergeCompactionWindowsTest(unittest.TestCase):
+    def test_transcript_windows_come_from_timeline_compactions(self):
+        timeline = SimpleNamespace(compactions=[
+            SimpleNamespace(begin_ts=10.0, end_ts=25.0)])
+        windows, source = merge_compaction_windows(timeline)
+        self.assertEqual(source, "transcript")
+        self.assertEqual(windows, [
+            {"ts": 10.0, "window_start": 10.0, "window_end": 25.0}])
+
+    def test_open_compaction_ends_at_its_begin(self):
+        timeline = SimpleNamespace(compactions=[
+            SimpleNamespace(begin_ts=10.0, end_ts=None)])
+        windows, source = merge_compaction_windows(timeline)
+        self.assertEqual(source, "transcript")
+        self.assertEqual(windows, [
+            {"ts": 10.0, "window_start": 10.0, "window_end": 10.0}])
+
+    def test_compaction_without_begin_ts_is_skipped(self):
+        timeline = SimpleNamespace(compactions=[
+            SimpleNamespace(begin_ts=None, end_ts=None)])
+        self.assertEqual(merge_compaction_windows(timeline), ([], None))
+
+    def test_billed_points_are_appended_after_transcript(self):
+        timeline = SimpleNamespace(compactions=[
+            SimpleNamespace(begin_ts=10.0, end_ts=25.0)])
+        billed = [{"ts": 110.0, "window_start": 100.0, "window_end": 110.0,
+                   "pre_prompt": 100000, "post_prompt": 50000}]
+        windows, source = merge_compaction_windows(timeline, billed)
+        self.assertEqual(source, "transcript+billed")
+        self.assertEqual(len(windows), 2)
+        self.assertEqual(windows[1]["post_prompt"], 50000)
+
+    def test_billed_only(self):
+        billed = [{"ts": 110.0, "window_start": 100.0, "window_end": 110.0,
+                   "pre_prompt": 100000, "post_prompt": 50000}]
+        windows, source = merge_compaction_windows(
+            SimpleNamespace(compactions=[]), billed)
+        self.assertEqual(source, "billed")
+        self.assertEqual(len(windows), 1)
+
+
+class BuildTokenStatsTest(unittest.TestCase):
+    def test_defaults_have_no_compaction_source(self):
+        stats = build_token_stats(SimpleNamespace(events=[]),
+                                  SimpleNamespace(compactions=[]))
+        self.assertIsNone(stats.compaction_source)
+        self.assertEqual(stats.compaction_points, [])
+        self.assertEqual(stats.repeat_class_totals, {})
+
+    def test_explicit_windows_are_stored(self):
+        windows = [{"ts": 110.0, "window_start": 100.0, "window_end": 110.0,
+                    "pre_prompt": 100000, "post_prompt": 50000}]
+        stats = build_token_stats(
+            SimpleNamespace(events=[]), SimpleNamespace(compactions=[]),
+            compaction_windows=windows, compaction_source="billed")
+        self.assertEqual(stats.compaction_source, "billed")
+        self.assertEqual(stats.compaction_points, windows)

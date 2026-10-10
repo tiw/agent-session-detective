@@ -129,6 +129,8 @@ class TokenStats:
     repeats: List[Repeat] = field(default_factory=list)
     repeat_extra_tokens: int = 0
     repeat_class_totals: Dict[str, int] = field(default_factory=dict)
+    compaction_source: Optional[str] = None
+    compaction_points: List[dict] = field(default_factory=list)
 
 
 def _usage_from_events(events: List[Event]) -> List[UsageRecord]:
@@ -521,7 +523,34 @@ def _repeats(events: List[Event],
     return repeats[:10], total, class_totals
 
 
-def build_token_stats(session: Session, timeline: Timeline) -> TokenStats:
+def merge_compaction_windows(timeline: Timeline,
+                             billed_points: Optional[List[dict]] = None,
+                             ) -> Tuple[List[dict], Optional[str]]:
+    """Compaction evidence windows from both sources. Transcript windows are
+    [begin_ts, end_ts or begin_ts]; billed points already carry their
+    [prev_ts, drop_ts] window. Source string names what backed the split."""
+    windows: List[dict] = []
+    sources: List[str] = []
+    for c in timeline.compactions:
+        if not c.begin_ts:
+            continue
+        windows.append({"ts": c.begin_ts, "window_start": c.begin_ts,
+                        "window_end": c.end_ts or c.begin_ts})
+    if windows:
+        sources.append("transcript")
+    for p in billed_points or []:
+        windows.append(dict(p))
+    if billed_points:
+        sources.append("billed")
+    return windows, "+".join(sources) or None
+
+
+def build_token_stats(
+    session: Session,
+    timeline: Timeline,
+    compaction_windows: Optional[List[dict]] = None,
+    compaction_source: Optional[str] = None,
+) -> TokenStats:
     stats = TokenStats()
     stats.usage_records = _usage_from_events(session.events)
     stats.input_total = sum(u.input_total for u in stats.usage_records)
@@ -539,7 +568,9 @@ def build_token_stats(session: Session, timeline: Timeline) -> TokenStats:
         else "unavailable (no context telemetry)"
     )
     stats.repeats, stats.repeat_extra_tokens, stats.repeat_class_totals = \
-        _repeats(session.events)
+        _repeats(session.events, compaction_windows)
+    stats.compaction_source = compaction_source or None
+    stats.compaction_points = list(compaction_windows or [])
 
     totals = {k: 0 for k in BUCKET_KEYS}
     for r in stats.turn_growth:
