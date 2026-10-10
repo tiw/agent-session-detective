@@ -295,6 +295,35 @@ class TreeRouteTests(unittest.TestCase):
 
             self.assertNotIn("billed (provider)", page)
 
+    def test_ide_db_param_joins_the_chain_from_the_default_db(self):
+        import agent_session_detective.billing as billing
+        from agent_session_detective import ide_db
+        from tests.test_ide_db import (KID_UUID, ROOT_UUID, coded,
+                                       identity_decryptor, make_db, row,
+                                       write_main_transcript)
+
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            transcript = base / (ROOT_UUID + ".jsonl")
+            write_main_transcript(transcript)
+            db = base / "local.db"
+            payload = {"role": "assistant", "content": "hello",
+                       "reasoning_content": "", "tool_calls": []}
+            make_db(db,
+                    children=[(KID_UUID, "call_00A", "agent_sub_custom")],
+                    messages=[(KID_UUID, row(1, "assistant", coded(payload)))])
+            original = billing.DEFAULT_DB_PATH
+            billing.DEFAULT_DB_PATH = db
+            self.addCleanup(setattr, billing, "DEFAULT_DB_PATH", original)
+            with patch.object(ide_db, "_resolve_decryptor",
+                              return_value=identity_decryptor):
+                with urllib.request.urlopen(
+                        self.tree_url(str(transcript)) + "&ide_db=1") as response:
+                    body = response.read().decode("utf-8")
+
+        self.assertEqual(response.status, 200)
+        self.assertIn("joined via ide-db 1", body)
+
 
 class TokenstatsSerializationTests(unittest.TestCase):
     def _stats(self):

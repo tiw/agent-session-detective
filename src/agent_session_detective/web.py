@@ -584,7 +584,7 @@ def _ir_adapter_id(session, source_path) -> str:
     return "unknown"
 
 
-def render_tree_page(session_path: str, billed: bool = False) -> str:
+def render_tree_page(session_path: str, billed: bool = False, ide_db: bool = False) -> str:
     """The actual skill tree for one session, as a standalone HTML page.
 
     Same IR projection the audit job uses, minus judge and catalog: the
@@ -599,6 +599,9 @@ def render_tree_page(session_path: str, billed: bool = False) -> str:
     session = load_session(source_path)
     if not session.events:
         raise ValueError("no events parsed")
+    if ide_db:
+        from .ide_db import attach_ide_db
+        attach_ide_db(session, source_path)
     document = build_audit_document(session, _ir_adapter_id(session, source_path))
     if billed:
         from .billing import attach_billed_usage
@@ -807,7 +810,8 @@ class Handler(BaseHTTPRequestHandler):
                 return
             try:
                 page = render_tree_page(
-                    path, billed=(params.get("billed") == ["1"]))
+                    path, billed=(params.get("billed") == ["1"]),
+                    ide_db=(params.get("ide_db") == ["1"]))
             except Exception as exc:
                 self._send_json(500, {"error": str(exc)})
                 return
