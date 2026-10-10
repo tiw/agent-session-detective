@@ -149,6 +149,14 @@ _MENU_PICK = re.compile(r"^[a-z0-9]$")
 # inside the pasted SQL.
 _TERMINAL_PROMPT = re.compile(r"^\S+@\S+[ \t]+\S+[ \t]+%")
 
+# Scheme-anchored on purpose: without one, "foo/bar?x=1" is not reliably
+# separable from the operator's own question mark.
+_URL = re.compile(r"[a-zA-Z][a-zA-Z0-9+.\-]*://\S+")
+
+# The clause the operator closed on: everything back to the last sentence
+# terminator, or the last newline. Dots count, so a filename ends a clause.
+_QUESTION_CLAUSE = re.compile(r"[^。．.！!？?\n]+[？?]$")
+
 # Above this a lead is a multi-paragraph brief or a report pasted back from
 # another agent, and the markers below belong to a clause inside it rather than
 # to the operator's own act. The longest single-act lead carrying one is 238
@@ -243,6 +251,15 @@ def _terminal_paste_back(text: str) -> Optional[str]:
     return matched.group(0) if matched is not None else None
 
 
+def _terminal_question(text: str) -> Optional[str]:
+    # The mark is read only at the end; the URL blank is a guard, not a recall
+    # device. Also not length-capped, for the same reason as the paste-back.
+    if not _URL.sub(" ", text).rstrip().endswith(("？", "?")):
+        return None
+    matched = _QUESTION_CLAUSE.search(text.rstrip())
+    return matched.group(0).strip() if matched is not None else None
+
+
 _RULES: List[Tuple[str, str, Callable[[str], Optional[str]]]] = [
     _marker_rule("goal_nudge", "noise",
                  "Continue working toward the active thread goal.",
@@ -274,6 +291,11 @@ _RULES: List[Tuple[str, str, Callable[[str], Optional[str]]]] = [
     ("acknowledgement", "confirm", _acknowledgement),
     ("correction", "correction", _correction),
     ("rejection", "rejection", _rejection),
+    # Last: every rule above has a sharper claim on a record that also ends
+    # with a question mark -- a lone ？ is a prod, a correction or rejection
+    # ending in one already carries its marker, and a paste-back is read from
+    # its prompt.
+    ("terminal_question", "question", _terminal_question),
 ]
 
 

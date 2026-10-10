@@ -110,8 +110,11 @@ class MachineTextTest(unittest.TestCase):
         only honest if the catch-all has to earn its label, so unmatched text
         is reported rather than swept into a neighbouring class. There is no
         evidence to quote because nothing matched, and inventing a quote would
-        be exactly the guess this module exists to avoid."""
-        got = classify("这个仓库的git地址是什么？")
+        be exactly the guess this module exists to avoid.
+
+        The fixture is a directive, not a question -- a question is a label of
+        its own, and a plain instruction is what the cascade has no rule for."""
+        got = classify("解决这个问题")
         self.assertEqual("unclassified", got.label)
         self.assertEqual("unclassified", got.rule)
         self.assertEqual("", got.evidence)
@@ -433,6 +436,185 @@ class PushbackTest(unittest.TestCase):
         self.assertGreater(len(text), 300)
         self.assertNotEqual("correction", classify(text).label)
         self.assertNotEqual("rejection", classify(text).label)
+
+
+class QuestionTest(unittest.TestCase):
+    """The operator closing a record on their own question.
+
+    The mark is read only at the end, because that is where the operator's act
+    sits -- a question mark further in belongs to a clause of whatever was
+    quoted or pasted, or to an earlier act of a record that closes on
+    something else. Reading it anywhere would claim 121 of the distinct
+    residue leads instead of 89: the 32 extras are documents (7 of them past
+    1k chars, up to 21.7k) and records whose mark is not the close. As
+    measured on 2026-10-10, the terminal mark is on 89 of the 546 residue
+    leads -- 16.3% of it -- and claiming them moves the residue rate from
+    50.6% to 42.3% of the 1080 distinct leads. 88 of the marks are full-width
+    and one is ASCII.
+
+    No length cap, unlike the form markers: the closing question is the whole
+    record's signature rather than a clause inside it. Both corpus leads above
+    300 chars (424 and 993) close on the operator's own appended question, and
+    both are unreadable to the form rules: past 300 chars the cap returns
+    before any marker is looked for, record-wide. This rule is the only one
+    that can read these two leads.
+
+    Last in the cascade, and the order is load-bearing: a lone ？ is
+    status_prod's prod before it is a question, corrections and rejections
+    that end in one already carry their marker, and a paste-back is
+    identified by its prompt regardless of where it ends.
+
+    URLs are blanked before the tail is read: a URL can end in ? as its query
+    separator, and the blank flips no label today -- all five leads whose only
+    ? is a separator are non-terminal -- so it is a guard against a text
+    ending on a URL, not a recall device."""
+
+    # A real 424-char brief and a real 993-char report pasted back, generated
+    # byte-exact from the corpus rather than transcribed. Length is the point:
+    # past 300 chars the form rules return before reading anything, so both
+    # records are residue under the cascade above -- the closing question is
+    # the operator's own act and the only thing a rule can read. The brief's
+    # close even carries 我的意思, the marker the correction rule would have
+    # read on a shorter record.
+    LONG_BRIEF = r'''① 7 桶组成模型 + 独立的 skill 桶
+dsh-context: system, tools, user, inject, skill, assistant, tool。ASD 只有 4 桶 system, history, injected, output。关键是它把 inject 和 skill 从 tool 里拆出来单独计，README 的理由很硬：「让一个偷偷摸摸的 skill 的上下文足迹没法藏在 injected-context 和 tool-result 桶里」。这正是我们做 skill 审计最该有的桶。 这个是学习dsh-context的内容。 我想知道如何针对session， 包括每次给LLM的input， LLM输出的output设计合理的数据结构，更好的描述整个agent过程， 目的是分析skill调用的情况， 分析context是不是组织的好，有没有给LLM加入没用的内容，重复的内容。 你理解我的意思吗？'''
+
+    PASTED_REPORT = r'''实际查一下磁盘目录结构来确认：
+两个目录都存在，职责不同。看一眼顶层 `projects/` 里放的是什么：
+确认了——你的直觉对了一半：**确实有 `~/.qoder/projects/`，但会话数据不放在那里**。磁盘实况如下：
+
+## 两个目录体系，职责不同
+
+**1. `~/.qoder/projects/`（顶层）— 项目持久状态/配置**
+```
+/Users/wangting/.qoder/projects/-Users-wangting-work-paze-test/
+```
+命名规则是**工作区绝对路径转义**（`/` → `-`），存放项目级绑定、配置状态等持久数据。这类数据「丢了会丢配置」，所以不放 cache。
+
+**2. `~/.qoder/cache/projects/` — 项目缓存/派生数据**
+```
+/Users/wangting/.qoder/cache/projects/paze-test-f18b5ecd/
+├── agent-tools/            # 工具执行缓存（Bash 输出落盘等）
+└── conversation-history/   # 会话历史 ← 你要找的在这里
+    └── b1d65022/b1d65022.jsonl
+```
+命名规则是**「项目名-短哈希」**（`paze-test-f18b5ecd`）。
+
+## 为什么会话历史归 cache 侧而不归 projects 侧
+
+区分标准就是我上一轮说的数据性质：
+| | 顶层 `projects/` | `cache/projects/` |
+|---|---|---|
+| 数据性质 | 配置/绑定关系（事实源） | 运行时生成的派生副本 |
+| 丢失影响 | 项目配置丢失 | 仅旧会话无法本地检索 |
+| 会话 transcript | ❌ 不在这里 | ✅ conversation-history/ |
+
+同一个项目在两处各有一条记录，是因为它既有「配置身份」（projects/）又有「运行时缓存产物」（cache/projects/）。会话 transcript 属于后者——它是每轮对话自动追加生成的运行时数据，所以落在 `cache/projects/` 而不是 `projects/`。 所以我们要读取哪里的数据？'''
+
+    def assertClassified(self, text, label, rule):
+        got = classify(text)
+        self.assertEqual(label, got.label, text)
+        self.assertEqual(rule, got.rule, text)
+        self.assertIn(got.evidence, text)
+        return got
+
+    def test_a_terminal_full_width_question_mark_is_a_question(self):
+        """Nine verbatim corpus leads, each the operator's own question and
+        each landing in the residue under the cascade above. The rule reads
+        the mark and never the wording: 如何使用？ and 为什么在cache目录下？ are
+        different asks and the same act here -- what a closing ？ evidences is
+        that the operator stopped to ask, which nothing above covers."""
+        for text in ("这个仓库的git地址是什么？",
+                     "有哪些可以优化的？",
+                     "如何使用？",
+                     "还有哪些分支？",
+                     "这是谁提交的？",
+                     "都实现了吗？",
+                     "为什么在cache目录下？",
+                     "不在.qoder/projects下面吗？",
+                     "在哪里看？"):
+            self.assertClassified(text, "question", "terminal_question")
+
+    def test_a_terminal_ascii_question_mark_is_a_question(self):
+        """The corpus's only ASCII mark, quoted whole: the two widths are the
+        same act and this branch keeps them one label. The URL blank ahead of
+        the test is what makes an ASCII ? reachable at all -- a record ending
+        on a raw URL would otherwise read as a question, which the guard test
+        below pins."""
+        text = "依据这个写一个 LLM Agent的skill，用来判断一个SPEC具体咋样?"
+        got = self.assertClassified(text, "question", "terminal_question")
+        self.assertEqual(text, got.evidence)
+
+    def test_a_long_lead_ending_in_the_operators_own_question_is_claimed(self):
+        """The two real leads behind the absent length cap, asserted as exact
+        bytes rather than described: both run past 300 chars, where a form
+        rule returns before reading anything -- the cap is all-or-nothing per
+        record, not a window -- and both close on the operator's own appended
+        question, quoted whole as the evidence."""
+        for text, quote in ((self.LONG_BRIEF, "你理解我的意思吗？"),
+                            (self.PASTED_REPORT, "所以我们要读取哪里的数据？")):
+            self.assertGreater(len(text), 300)
+            self.assertEqual(quote, self.assertClassified(
+                text, "question", "terminal_question").evidence)
+
+    def test_the_closing_clause_is_quoted_whole(self):
+        """Twelve of the 89 clauses run past 40 chars and the longest is this
+        129-char one, which is why the evidence quote carries no cap of its
+        own: it is the operator's closing words, cut back to the last sentence
+        terminator. A dot counts as one, pinned by the second assertion --
+        the clause inside 不在.qoder/projects下面吗？ starts after the dot, so
+        a mixed CJK-Latin sentence does not drag the previous one into the
+        quote."""
+        text = ("方案评审（设计决策）是人的领地，但粒度可摊销：长期同一 "
+                "codebase 的高频任务流，方案评审可沉淀为环境规则（lint、约束、"
+                "skill，一次性投资，Poteto 路线）；我们现在有几千条用户使用"
+                "Paze的轨迹数据， 如何从中发现高频任务流，并且沉淀呢？")
+        self.assertGreater(len(text), 40)
+        self.assertEqual(text, self.assertClassified(
+            text, "question", "terminal_question").evidence)
+        self.assertEqual("qoder/projects下面吗？",
+                         classify("不在.qoder/projects下面吗？").evidence)
+
+    def test_a_question_mark_inside_the_text_is_not_terminal(self):
+        """The three shortest of the 32 leads a contains-anywhere read would
+        claim, kept as guards. None is a pasted document: ？你在干活吗 opens
+        with the mark, and the other two ask and then instruct, closing on
+        the instruction -- multi-act records whose mark is not the close,
+        exactly what the terminal-only read declines to label."""
+        for text in ("抽取结果怎样？对比之前",
+                     "规则包里具体是什么呢？举几个具体的例子",
+                     "？你在干活吗"):
+            self.assertNotEqual("question", classify(text).label, text)
+
+    def test_a_query_separator_is_not_a_question_mark(self):
+        """Why the tail test runs on a URL-blanked copy. The first fixture is
+        the shape the guard exists for, a record ending on a raw URL query;
+        the second is the real 139-char corpus lead that motivated it, one of
+        the five leads whose only ? is a separator. All five are
+        non-terminal, so the blank flips no label today: it is a guard, not a
+        recall device."""
+        self.assertNotEqual("question", classify(
+            "看一下 https://example.com/search?").label)
+        self.assertNotEqual("question", classify(
+            "安装 https://mcp-gw.dingtalk.com/server/"
+            "246470a3eec3a7eb66f8e0cef7031589395405b45f22635efd5e08c4d7b18241"
+            "?key=0c776f07100c568e536c2e7992a988dc").label)
+
+    def test_the_rules_ahead_of_it_win_when_a_record_ends_in_a_question(self):
+        """The order pinned the only way it can be: with records that end in a
+        question mark and belong to a rule above. The rejection fixture is a
+        real lead -- 不要浪费token sits early, a question closes the record,
+        and the veto is the sharper claim. The paste-back is synthetic, since
+        no corpus paste-back ends in ？ (all seven close elsewhere), and it
+        pins that the prompt identifies the record even when a mark closes
+        it: were this rule first, the tail would read as a question."""
+        rejection = ("我目前想聚焦的场景是code-agent的context效率提升，不要浪费"
+                     "token，并且提升速度。 按照这个mvp， 你建议怎么搞？")
+        self.assertClassified(rejection, "rejection", "rejection")
+        paste_back = ("wangting@Q232Q30CPJ agent-session-detective % "
+                      "python3 -m pytest tests/ -q\n1 failed, 24 passed\n"
+                      "啥意思？")
+        self.assertClassified(paste_back, "fact", "terminal_paste_back")
 
 
 class FactTest(unittest.TestCase):
