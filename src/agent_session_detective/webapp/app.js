@@ -29,6 +29,10 @@
     "judge":
       "让 LLM 扫描全部未消费的 skill，反事实回答哪些本该触发却没触发。每条结论必须附原文逐字证据，" +
       "约 10 分钟。判定是判断不是事实，证据才是可核对的部分。",
+    "billed":
+      "接入 Qoder 本地 SharedClientCache 的账单 token 序列（只读）。CLI 形会话的 transcript 无遥测，" +
+      "勾选后每轮上下文柱状图从账单 prompt 序列重建，压缩点也从账单锯齿识别；" +
+      "账单数字是会话级口径，不与日志侧 token 混算。",
     "summary":
       "这次审计的硬数字：会话轮数、事件总数、skill 正式加载与直读次数、本地 catalog 规模、" +
       "judge 是否可用、审计耗时。",
@@ -258,6 +262,7 @@
       }).filter(Boolean),
       steps: auditForm.elements.playbook.value ? [auditForm.elements.playbook.value] : [],
       judge_triggers: auditForm.elements.judge.checked,
+      billed: auditForm.elements.billed.checked,
     };
     report.innerHTML = "";
     progress.hidden = false;
@@ -291,6 +296,7 @@
       }).filter(Boolean),
       steps: auditForm.elements.playbook.value ? [auditForm.elements.playbook.value] : [],
       judge_triggers: auditForm.elements.judge.checked,
+      billed: auditForm.elements.billed.checked,
       force: true,
     };
     report.innerHTML = "";
