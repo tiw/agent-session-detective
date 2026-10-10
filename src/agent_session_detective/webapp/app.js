@@ -62,7 +62,12 @@
       "IR 1.1 证据化加载台账：stub（ Skill 工具的返回占位）与随后的正文出现按序配对，" +
       "配上的行才给出成本 ~N (EST)；没有等到正文的行记 unavailable，只留 marker 不留猜测。" +
       "reload = 压缩后正文重新出现；redundant bodies 是连续重复正文，只计数不产生行。" +
-      "这里是全报告唯一出现加载成本数字的地方。"
+      "这里是全报告唯一出现加载成本数字的地方。",
+    "bill":
+      "双账单：成本行回答 tokens 废在哪，路由行回答该加载的加载了吗。" +
+      "行等级：事实 = 渠道直接测量；观测 = provider 遥测；证据 = 配对台账；推断 = 估算。" +
+      "share 只在 EST 口径小计内计算（上下文增长/重复注入税/技能加载成本/subagent 返回），" +
+      "输出与缓存率不入分母；无分母则不显示百分比。subagent 行可展开查看臃肿派发明细。"
   };
 
   var TEMPLATES = {
@@ -151,14 +156,26 @@
   // sessions sidebar, always visible
   // ------------------------------------------------------------------
 
-  function loadSessions() {
-    setStatus("scanning sessions…");
-    fetch("/api/sessions").then(function (r) { return r.json(); }).then(function (data) {
+  function loadSessions(query) {
+    var q = (query || "").trim();
+    setStatus(q ? "searching all sessions for “" + q + "”…" : "scanning sessions…");
+    var url = "/api/sessions" + (q ? "?q=" + encodeURIComponent(q) : "");
+    fetch(url).then(function (r) { return r.json(); }).then(function (data) {
       // sidebar is discovery-only: turns/skills/token stats are computed
       // on demand by the audit job, not here. fleet stays hidden until
       // the fleet button asks for it.
       document.getElementById("fleet").hidden = true;
       sessionList.innerHTML = "";
+      if (!data.sessions.length) {
+        var empty = document.createElement("div");
+        empty.className = "session-empty";
+        empty.textContent = q
+          ? "no session matches “" + q + "” (of " + data.total + " discovered)"
+          : "no sessions discovered";
+        sessionList.appendChild(empty);
+        setStatus(data.sessions.length + " matches (of " + (data.total || 0) + " discovered).");
+        return;
+      }
       data.sessions.forEach(function (s, i) {
         var el = document.createElement("div");
         el.className = "session-row";
@@ -174,11 +191,21 @@
         el.addEventListener("click", function () { openAudit(s, el); });
         sessionList.appendChild(el);
       });
-      setStatus(data.sessions.length + " recent sessions (of " + (data.total || data.sessions.length) + "). pick one.");
+      setStatus(q
+        ? data.sessions.length + " matches for “" + q + "” (of " + data.total + " discovered)."
+        : data.sessions.length + " recent sessions (of " + (data.total || data.sessions.length) + "). pick one.");
     }).catch(function (e) {
       setStatus("error: " + e.message);
     });
   }
+
+  var searchInput = document.getElementById("session-search");
+  var searchTimer = null;
+  searchInput.addEventListener("input", function () {
+    clearTimeout(searchTimer);
+    var value = searchInput.value;
+    searchTimer = setTimeout(function () { loadSessions(value); }, 250);
+  });
 
   document.getElementById("fleet-btn").addEventListener("click", function () {
     setStatus("computing fleet stats over all sessions (parses every log)…");
@@ -251,7 +278,9 @@
     });
   }
 
-  document.getElementById("refresh").addEventListener("click", loadSessions);
+  document.getElementById("refresh").addEventListener("click", function () {
+    loadSessions(searchInput.value);
+  });
 
   auditForm.addEventListener("submit", function (ev) {
     ev.preventDefault();
@@ -581,11 +610,78 @@
         "<table><tr><th>次数</th><th>每次~tokens</th><th>多付</th><th>分类</th><th>内容</th></tr>" +
         rrows + "</table>" + caption + "</details>");
     }
-    return "<section><h2>token governance " + helpDot("tokens") + "</h2>" + parts.join("") + "</section>";
+    return "<section id='tokens'><h2>token governance " + helpDot("tokens") + "</h2>" + parts.join("") + "</section>";
+  }
+
+  function renderBill(bill, returns) {
+    var GRADE_CLS = {"事实": "fact", "观测": "ok", "证据": "warn",
+                     "推断": "dim", "判断": "dim"};
+    var rows = bill.cost_rows.map(function (row) {
+      var tok = row.tokens_est == null
+        ? '<span class="unavailable">unavailable</span>'
+        : "~" + row.tokens_est + " (EST)";
+      var share = row.share == null ? "—" : (row.share * 100).toFixed(1) + "%";
+      var html = "<tr><td>" + esc(row.label) + "</td><td>" + tok +
+        "</td><td>" + share + "</td><td>" + esc(row.detail) + "</td><td>" +
+        badge(GRADE_CLS[row.grade] || "dim", row.grade) + "</td></tr>";
+      if (row.key === "subagent_returns" && returns) {
+        (returns.rows || []).filter(function (rr) {
+          return (rr.flagged_reasons || []).length;
+        }).slice(0, 3).forEach(function (rr) {
+          var proc = rr.subagent_tokens_est == null
+            ? "unavailable" : "~" + rr.subagent_tokens_est;
+          var ret = rr.return_tokens_est == null
+            ? "unavailable" : "~" + rr.return_tokens_est;
+          html += '<tr class="bill-sub-row"><td colspan="5">' +
+            badge("warn", "bloat") + " " + esc(rr.dispatch_id) +
+            " · 返回 " + ret + " · 过程 " + proc +
+            (rr.ratio == null ? "" : " · 比 " + rr.ratio) +
+            " · " + esc((rr.flagged_reasons || []).join(" + ")) +
+            (rr.description ? " · " + esc(rr.description) : "") +
+            "</td></tr>";
+        });
+      }
+      return html;
+    }).join("");
+    var h = '<section id="bill"><h2>bill · 成本与路由' + helpDot("bill") + "</h2>" +
+      '<table class="bill-table"><thead><tr><th>成本项</th><th>tokens</th>' +
+      "<th>share</th><th>detail</th><th>等级</th></tr></thead><tbody>" +
+      rows +
+      '<tr><td class="dim">EST 小计</td><td>~' + bill.est_subtotal +
+      '</td><td colspan="3" class="dim">share 分母，不含 output / 缓存率</td></tr>' +
+      "</tbody></table>";
+    var routing = bill.routing || {lines: [], enabled: false};
+    if (routing.lines.length) {
+      h += '<div class="bill-routing">' +
+        routing.lines.map(function (l) {
+          return '<a href="' + esc(l.anchor) + '">' + esc(l.label) + " " +
+            esc(l.value) + " " + badge("dim", l.grade) + "</a>";
+        }).join("") +
+        (routing.enabled ? ""
+         : '<span class="dim">judge 未启用，路由账单不完整。</span>') +
+        "</div>";
+    } else {
+      h += '<p class="dim">无路由信号。</p>';
+    }
+    if (bill.billed) {
+      var cachePct = bill.billed.cached_share == null
+        ? "unknown" : Math.round(bill.billed.cached_share * 100) + "%";
+      h += '<p class="dim">billed（会话级，' + bill.billed.requests +
+        " 请求 · prompt " + bill.billed.prompt_total +
+        " · completion " + bill.billed.completion_total +
+        " · cache " + cachePct + "）：" + esc(bill.billed.note) + "</p>";
+    }
+    (bill.notes || []).forEach(function (n) {
+      h += '<p class="dim">' + esc(n) + "</p>";
+    });
+    return h + "</section>";
   }
 
   function renderReport(r) {
     var parts = [];
+    if (r.bill) {
+      parts.push(renderBill(r.bill, r.subagent_returns));
+    }
     parts.push(
       "<section><h2>summary " + helpDot("summary") + "</h2><div class='session-meta'>" +
       badge("dim", "turns " + r.session.turns) +
@@ -626,7 +722,7 @@
         var cls = e.status === "loaded" ? "ok" : e.status === "file-read" ? "warn" : "bad";
         return "<tr><td>" + esc(e.name) + "</td><td>" + badge(cls, e.status) + "</td></tr>";
       }).join("");
-      parts.push("<section><h2>expectations " + helpDot("expect") + "</h2><table><tr><th>skill</th><th>status</th></tr>" + rows + "</table></section>");
+      parts.push("<section id='expectations'><h2>expectations " + helpDot("expect") + "</h2><table><tr><th>skill</th><th>status</th></tr>" + rows + "</table></section>");
     }
 
     var missed = r.judgments.missed;
@@ -641,7 +737,7 @@
       if (r.judgments.errors.length) {
         body += '<p class="dim">defects: ' + esc(r.judgments.errors.join(" · ")) + "</p>";
       }
-      parts.push("<section><h2>findings " + helpDot("findings") + "</h2>" + body + "</section>");
+      parts.push("<section id='findings'><h2>findings " + helpDot("findings") + "</h2>" + body + "</section>");
     }
 
     if (r.if_results.length) {
@@ -657,7 +753,7 @@
             badge(vcls, v.status) + "</td><td>" + esc((v.evidence || v.rationale || "").slice(0, 140)) + "</td></tr>";
         }).join("");
         parts.push(
-          "<section><h2>instruction following · " + esc(res.playbook) + " " + helpDot("if") + "</h2>" +
+          "<section id='if'><h2>instruction following · " + esc(res.playbook) + " " + helpDot("if") + "</h2>" +
           "<p>" + badge(cls, res.coverage.toFixed(2) + " / gate " + res.gate.toFixed(2)) + "</p>" +
           "<table><tr><th>#</th><th>step</th><th>status</th><th>evidence</th></tr>" + vrows + "</table></section>"
         );
@@ -701,7 +797,7 @@
       }).join("");
       var loadTotals = sl.totals;
       parts.push(
-        "<section><h2>skill loads (evidence-backed) " + helpDot("loads") + "</h2>" +
+        "<section id='loads'><h2>skill loads (evidence-backed) " + helpDot("loads") + "</h2>" +
         (loadRows
           ? "<table><tr><th>load</th><th>skill</th><th>agent</th><th>time</th><th>channel</th><th>kind</th><th>cost</th></tr>" +
             loadRows + "</table>"
