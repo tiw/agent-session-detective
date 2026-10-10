@@ -14,7 +14,7 @@ import re
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from .ir.schema import AuditDocument, BilledUsage
 
@@ -168,3 +168,31 @@ def attach_billed_usage(document: AuditDocument, source_path, db_path=None) -> N
     except BillingUnavailable as exc:
         document.coverage.notes.append(
             "billed_usage: unavailable (%s)" % exc.reason)
+
+
+# A compaction shows up in the bill as a hard prompt drop (fresh context
+# below 75% of the previous request) with a cold cache (cached -> 0).
+COMPACTION_DROP_RATIO = 0.75
+
+
+def compaction_points_from_series(rows: List[dict]) -> List[dict]:
+    points: List[dict] = []
+    for prev, cur in zip(rows, rows[1:]):
+        if (prev["prompt"] > 0
+                and cur["prompt"] < prev["prompt"] * COMPACTION_DROP_RATIO
+                and cur["cached"] == 0):
+            points.append({"ts": cur["ts"], "window_start": prev["ts"],
+                           "window_end": cur["ts"], "pre_prompt": prev["prompt"],
+                           "post_prompt": cur["prompt"]})
+    return points
+
+
+def billed_compaction_points(session_uuid: str,
+                             db_path=None) -> Tuple[List[dict], Optional[str]]:
+    """Compaction points from the billed series. Never raises: any billing
+    problem returns ([], reason)."""
+    try:
+        rows = query_billed_series(session_uuid, db_path=db_path)
+    except BillingUnavailable as exc:
+        return [], exc.reason
+    return compaction_points_from_series(rows), None

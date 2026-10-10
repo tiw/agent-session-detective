@@ -9,6 +9,8 @@ from pathlib import Path
 from agent_session_detective.billing import (
     BillingUnavailable,
     attach_billed_usage,
+    billed_compaction_points,
+    compaction_points_from_series,
     query_billed_series,
     query_billed_usage,
     session_uuid_from_source,
@@ -266,6 +268,57 @@ class QueryBilledSeriesTest(unittest.TestCase):
             ])
             with self.assertRaises(BillingUnavailable):
                 query_billed_series(UUID, db_path=db)
+
+
+class CompactionPointsTest(unittest.TestCase):
+    def test_sawtooth_fires_a_compaction_point(self):
+        points = compaction_points_from_series([
+            {"ts": 100.0, "prompt": 100000, "completion": 40, "cached": 80000},
+            {"ts": 110.0, "prompt": 50000, "completion": 40, "cached": 0},
+        ])
+        self.assertEqual(points, [
+            {"ts": 110.0, "window_start": 100.0, "window_end": 110.0,
+             "pre_prompt": 100000, "post_prompt": 50000}])
+
+    def test_gradual_decline_does_not_fire(self):
+        points = compaction_points_from_series([
+            {"ts": 100.0, "prompt": 100000, "completion": 40, "cached": 80000},
+            {"ts": 110.0, "prompt": 90000, "completion": 40, "cached": 0},
+        ])
+        self.assertEqual(points, [])
+
+    def test_cached_not_zero_does_not_fire(self):
+        points = compaction_points_from_series([
+            {"ts": 100.0, "prompt": 100000, "completion": 40, "cached": 80000},
+            {"ts": 110.0, "prompt": 50000, "completion": 40, "cached": 40000},
+        ])
+        self.assertEqual(points, [])
+
+    def test_empty_or_single_row_has_no_points(self):
+        self.assertEqual(compaction_points_from_series([]), [])
+        self.assertEqual(compaction_points_from_series(
+            [{"ts": 100.0, "prompt": 100000, "completion": 40, "cached": 80000}]),
+            [])
+
+    def test_billed_compaction_points_reports_unavailable_reason(self):
+        points, reason = billed_compaction_points(
+            UUID, db_path=Path("/nonexistent/asd-test.db"))
+        self.assertEqual(points, [])
+        self.assertIn("db not found", reason)
+
+    def test_billed_compaction_points_end_to_end(self):
+        with tempfile.TemporaryDirectory() as directory:
+            db = make_series_db(Path(directory) / "local.db", [
+                (1754709632658, {"prompt_tokens": 100000, "completion_tokens": 40,
+                                 "cached_tokens": 80000}),
+                (1754709642658, {"prompt_tokens": 50000, "completion_tokens": 40,
+                                 "cached_tokens": 0}),
+            ])
+            points, reason = billed_compaction_points(UUID, db_path=db)
+            self.assertIsNone(reason)
+            self.assertEqual(len(points), 1)
+            self.assertEqual(points[0]["post_prompt"], 50000)
+            self.assertEqual(points[0]["window_start"], 1754709632.658)
 
 
 if __name__ == "__main__":
