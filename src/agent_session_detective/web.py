@@ -44,6 +44,7 @@ def cache_key(params: dict) -> str:
             "expect": sorted(params.get("expect") or []),
             "steps": sorted(params.get("steps") or []),
             "judge_triggers": bool(params.get("judge_triggers")),
+            "billed": bool(params.get("billed")),
         },
         sort_keys=True,
     )
@@ -90,7 +91,10 @@ def fingerprint(session_path: str, judge_model: str) -> str:
     # changes (v6, v7) had missed IR 1.3-1.6, so stale cached results kept
     # being served. From here every IR bump self-invalidates; the counter
     # stays for web-local payload changes.
-    return "%.3f:%d:%s:v8:ir%s" % (newest, total, judge_model, IR_VERSION)
+    # v9 adds repeat-injection classification (per-occurrence classes,
+    # repeat_class_totals, compaction_source/points) — v8 cached results
+    # would render repeats without the class badges and the split caption.
+    return "%.3f:%d:%s:v9:ir%s" % (newest, total, judge_model, IR_VERSION)
 
 
 def cache_load(key: str, fp: str) -> Optional[dict]:
@@ -222,10 +226,17 @@ def tokenstats_to_dict(s: TokenStats) -> dict:
                 "occurrences": r.occurrences,
                 "tokens_each": r.tokens_each,
                 "extra_tokens": r.extra_tokens,
+                "tool_name": r.tool_name,
+                "chars_each": r.chars_each,
+                "occurrence_classes": r.occurrence_classes,
+                "extra_by_class": r.extra_by_class,
             }
             for r in s.repeats
         ],
         "repeat_extra_tokens": s.repeat_extra_tokens,
+        "repeat_class_totals": s.repeat_class_totals,
+        "compaction_source": s.compaction_source,
+        "compaction_points": s.compaction_points,
         "usage_record_count": len(s.usage_records),
     }
 

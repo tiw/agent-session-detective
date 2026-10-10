@@ -13,6 +13,7 @@ from unittest.mock import patch
 
 import agent_session_detective.web as web
 from agent_session_detective.ir.schema import IR_VERSION
+from agent_session_detective.tokenstats import Repeat, TokenStats
 from agent_session_detective.web import cache_load, cache_store, discover_sessions, fingerprint
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -55,7 +56,7 @@ class QoderWebTests(unittest.TestCase):
                 },
             )
 
-    def test_fingerprint_uses_v8_and_ir_version_for_transcript_file_metadata(self):
+    def test_fingerprint_uses_v9_and_ir_version_for_transcript_file_metadata(self):
         with tempfile.TemporaryDirectory() as directory:
             transcript = Path(directory) / "transcript.jsonl"
             transcript.write_text("hello", encoding="utf-8")
@@ -63,8 +64,24 @@ class QoderWebTests(unittest.TestCase):
 
             self.assertEqual(
                 fingerprint(str(transcript), "test-model"),
-                "1234.000:5:test-model:v8:ir%s" % IR_VERSION,
+                "1234.000:5:test-model:v9:ir%s" % IR_VERSION,
             )
+
+    def test_v9_fingerprint_invalidates_v8_cached_results(self):
+        # v8 cached results carry repeats without per-occurrence classes;
+        # the v9 bump must make cache_load miss.
+        v8_fp = "1234.000:5:test-model:v8:ir1.6"
+        v9_fp = "1234.000:5:test-model:v9:ir1.6"
+        result = {"status_line": "stale v8 payload"}
+
+        original_cache_dir = web.CACHE_DIR
+        web.CACHE_DIR = Path(tempfile.mkdtemp())
+        try:
+            cache_store("k", v8_fp, result)
+            self.assertEqual(cache_load("k", v8_fp), result)
+            self.assertIsNone(cache_load("k", v9_fp))
+        finally:
+            web.CACHE_DIR = original_cache_dir
 
     def test_an_ir_version_bump_invalidates_cached_results(self):
         # The motivating bug: IR moved 1.3→1.6 with no manual key bump, so
@@ -276,6 +293,49 @@ class TreeRouteTests(unittest.TestCase):
                 page = response.read().decode("utf-8")
 
             self.assertNotIn("billed (provider)", page)
+
+
+class TokenstatsSerializationTests(unittest.TestCase):
+    def _stats(self):
+        repeat = Repeat(
+            preview="same output", occurrences=3, tokens_each=100,
+            extra_tokens=200, tool_name="Read", chars_each=300,
+            occurrence_classes=["first", "post_compaction", "poll"],
+            extra_by_class={"post_compaction": 100, "poll": 100})
+        return TokenStats(
+            repeats=[repeat], repeat_extra_tokens=200,
+            repeat_class_totals={"post_compaction": 100, "poll": 100},
+            compaction_source="transcript+billed",
+            compaction_points=[{"ts": 110.0, "window_start": 100.0,
+                                "window_end": 110.0, "pre_prompt": 100000,
+                                "post_prompt": 50000}])
+
+    def test_repeats_carry_classification_fields(self):
+        payload = web.tokenstats_to_dict(self._stats())
+        entry = payload["repeats"][0]
+        self.assertEqual(entry["occurrence_classes"],
+                         ["first", "post_compaction", "poll"])
+        self.assertEqual(entry["extra_by_class"],
+                         {"post_compaction": 100, "poll": 100})
+        self.assertEqual(entry["tool_name"], "Read")
+        self.assertEqual(entry["chars_each"], 300)
+        # raw occurrence timestamps stay internal
+        self.assertNotIn("occurrence_ts", entry)
+
+    def test_top_level_classification_fields(self):
+        payload = web.tokenstats_to_dict(self._stats())
+        self.assertEqual(payload["repeat_class_totals"],
+                         {"post_compaction": 100, "poll": 100})
+        self.assertEqual(payload["compaction_source"], "transcript+billed")
+        self.assertEqual(payload["compaction_points"][0]["post_prompt"], 50000)
+
+
+class CacheKeyTests(unittest.TestCase):
+    def test_billed_flag_changes_the_cache_key(self):
+        base = {"path": "/tmp/x.jsonl", "expect": None, "steps": None,
+                "judge_triggers": False}
+        self.assertNotEqual(web.cache_key(base),
+                            web.cache_key({**base, "billed": True}))
 
 
 if __name__ == "__main__":
