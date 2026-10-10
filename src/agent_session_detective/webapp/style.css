@@ -404,3 +404,25 @@ blockquote {
 .feed-filter .kind-badge:hover { opacity: 1; }
 .feed-filter .kind-badge.active { opacity: 1; box-shadow: 0 0 0 1px currentColor; }
 .hidden { display: none !important; }
+
+/* bill card (P0-1): 5-column cost table + routing line chips */
+.bill-table td {
+  padding: 4px 8px 4px 0;
+  vertical-align: top;
+}
+.bill-table td:nth-child(2) {
+  text-align: right;
+  white-space: nowrap;
+}
+.bill-sub-row td {
+  padding: 0 0 6px 24px;
+  font-size: 12px;
+  color: var(--dim);
+}
+.bill-routing {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+  font-size: 12.5px;
+}
