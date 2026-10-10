@@ -28,6 +28,7 @@ Two deliberate refinements were locked while turning the spec into code:
 
 1. Transcript compaction windows are `[begin_ts, end_ts or begin_ts]`, not the spec's point windows `[ts, ts]` — same strict-overlap formula, sharper edges.
 2. `_repeats` returns a **3-tuple** `(top10_repeats, total_over_ALL_groups, class_totals_over_ALL_groups)` so per-class totals always add up against the headline `repeat_extra_tokens` (the fleet badge splits that exact total).
+3. Task 1 review delta (commit 72cd299): `query_billed_series` parses fields strictly (`int(info["prompt_tokens"])` etc.) and skips malformed rows whole — never zero-fills, so a missing field can never fabricate a false sawtooth trough; `_gmt_create_to_ts` rejects nan/inf.
 
 Locked decisions: dual-source windows with the billed side opt-in; no evidence source → neutral caption + `unclassified` (never a silent "violation" claim); poll signature = same tool + gap ≤120s + each copy <2000 chars; classification priority `post_compaction` > `poll` > `no_compaction` > `unclassified`; occurrence 0 is always "first" and never contributes extra tokens.
 
