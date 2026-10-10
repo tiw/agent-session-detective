@@ -225,7 +225,7 @@ class CodexWebTests(unittest.TestCase):
             os.utime(codex_file, (1234, 1234))
 
             fp = fingerprint(str(codex_file), "test-model")
-            self.assertEqual(fp, "1234.000:12:test-model:v10:ir%s" % IR_VERSION)
+            self.assertEqual(fp, "1234.000:12:test-model:v11:ir%s" % IR_VERSION)
 
 
 class CodexDiscoveryTests(unittest.TestCase):

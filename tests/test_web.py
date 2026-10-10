@@ -58,7 +58,7 @@ class QoderWebTests(unittest.TestCase):
                 },
             )
 
-    def test_fingerprint_uses_v10_and_ir_version_for_transcript_file_metadata(self):
+    def test_fingerprint_uses_v11_and_ir_version_for_transcript_file_metadata(self):
         with tempfile.TemporaryDirectory() as directory:
             transcript = Path(directory) / "transcript.jsonl"
             transcript.write_text("hello", encoding="utf-8")
@@ -66,22 +66,22 @@ class QoderWebTests(unittest.TestCase):
 
             self.assertEqual(
                 fingerprint(str(transcript), "test-model"),
-                "1234.000:5:test-model:v10:ir%s" % IR_VERSION,
+                "1234.000:5:test-model:v11:ir%s" % IR_VERSION,
             )
 
-    def test_v10_fingerprint_invalidates_v9_cached_results(self):
-        # v9 cached billed results lack the turn-growth series rebuilt from
-        # the billed prompt rows; the v10 bump must make cache_load miss.
-        v9_fp = "1234.000:5:test-model:v9:ir1.6"
+    def test_v11_fingerprint_invalidates_v10_cached_results(self):
+        # v10 cached results lack the bill + subagent_returns blocks; the
+        # v11 bump must make cache_load miss.
         v10_fp = "1234.000:5:test-model:v10:ir1.6"
-        result = {"status_line": "stale v9 payload"}
+        v11_fp = "1234.000:5:test-model:v11:ir1.6"
+        result = {"status_line": "stale v10 payload"}
 
         original_cache_dir = web.CACHE_DIR
         web.CACHE_DIR = Path(tempfile.mkdtemp())
         try:
-            cache_store("k", v9_fp, result)
-            self.assertEqual(cache_load("k", v9_fp), result)
-            self.assertIsNone(cache_load("k", v10_fp))
+            cache_store("k", v10_fp, result)
+            self.assertEqual(cache_load("k", v10_fp), result)
+            self.assertIsNone(cache_load("k", v11_fp))
         finally:
             web.CACHE_DIR = original_cache_dir
 
@@ -162,6 +162,122 @@ class SessionDiscoveryScopeTests(unittest.TestCase):
             sessions = discover_sessions([str(base)])
 
             self.assertEqual([s["path"] for s in sessions], [str(rollout)])
+
+
+def make_flat_sessions(base: Path, count: int, workspace: str = "ws"):
+    """``count`` transcripts under ``base/<workspace>/`` with increasing mtimes,
+    so index 0 is the oldest and the last is the newest."""
+    paths = []
+    for i in range(count):
+        transcript = base / workspace / ("%02d-session.jsonl" % i)
+        transcript.parent.mkdir(parents=True, exist_ok=True)
+        transcript.write_text("{}", encoding="utf-8")
+        os.utime(transcript, (1000 + i, 1000 + i))
+        paths.append(transcript)
+    return paths
+
+
+class SessionQueryTests(unittest.TestCase):
+    """The sidebar shows only the SIDEBAR_LIMIT most recent sessions, while
+    discovery finds hundreds. A session that fell out of the top N must still
+    be reachable by searching its id or workspace."""
+
+    def test_query_reaches_a_session_beyond_the_sidebar_limit(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            make_flat_sessions(base, web.SIDEBAR_LIMIT + 2)
+
+            out = web.list_sessions([str(base)], query="00-session")
+
+            self.assertEqual([s["id"] for s in out["sessions"]], ["00-session"])
+            self.assertEqual(out["total"], web.SIDEBAR_LIMIT + 2)
+
+    def test_query_matches_the_workspace_name(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            make_flat_sessions(base, web.SIDEBAR_LIMIT + 2, workspace="paze-test")
+
+            out = web.list_sessions([str(base)], query="paze")
+
+            self.assertEqual(len(out["sessions"]), web.SIDEBAR_LIMIT + 2)
+
+    def test_query_is_case_insensitive(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            make_flat_sessions(base, 1, workspace="Demo-Work")
+
+            out = web.list_sessions([str(base)], query="DEMO-WORK")
+
+            self.assertEqual([s["id"] for s in out["sessions"]], ["00-session"])
+
+    def test_query_with_no_match_returns_an_empty_list(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            make_flat_sessions(base, 3)
+
+            out = web.list_sessions([str(base)], query="no-such-session")
+
+            self.assertEqual(out["sessions"], [])
+            self.assertEqual(out["total"], 3)
+
+    def test_empty_query_keeps_the_default_capped_listing(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            make_flat_sessions(base, web.SIDEBAR_LIMIT + 2)
+
+            out = web.list_sessions([str(base)], query="")
+
+            self.assertEqual(len(out["sessions"]), web.SIDEBAR_LIMIT)
+            self.assertNotIn("00-session", [s["id"] for s in out["sessions"]])
+
+    def test_query_caps_at_the_search_limit(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            make_flat_sessions(base, web.SEARCH_LIMIT + 5, workspace="everywhere")
+
+            out = web.list_sessions([str(base)], query="everywhere")
+
+            self.assertEqual(len(out["sessions"]), web.SEARCH_LIMIT)
+
+
+class SessionQueryRouteTests(unittest.TestCase):
+    """GET /api/sessions?q=... passes the query through to list_sessions."""
+
+    @classmethod
+    def setUpClass(cls):
+        import threading
+
+        cls.server = ThreadingHTTPServer(("127.0.0.1", 0), web.Handler)
+        cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
+        cls.thread.start()
+        cls.base = "http://127.0.0.1:%d" % cls.server.server_address[1]
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server.shutdown()
+        cls.server.server_close()
+
+    def test_q_param_filters_the_sidebar_listing(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            make_flat_sessions(base, web.SIDEBAR_LIMIT + 2)
+
+            with patch.object(web, "DEFAULT_ROOTS", [str(base)]):
+                with urllib.request.urlopen(self.base + "/api/sessions?q=00-session") as r:
+                    payload = json.loads(r.read().decode("utf-8"))
+
+            self.assertEqual([s["id"] for s in payload["sessions"]], ["00-session"])
+
+    def test_no_q_param_returns_the_capped_listing(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            make_flat_sessions(base, web.SIDEBAR_LIMIT + 2)
+
+            with patch.object(web, "DEFAULT_ROOTS", [str(base)]):
+                with urllib.request.urlopen(self.base + "/api/sessions") as r:
+                    payload = json.loads(r.read().decode("utf-8"))
+
+            self.assertEqual(len(payload["sessions"]), web.SIDEBAR_LIMIT)
 
 
 class TreeRouteTests(unittest.TestCase):
@@ -582,6 +698,43 @@ class SuggestNextStepsRepeatTests(unittest.TestCase):
         out = web.suggest_next_steps(self._timeline(), [], [], [], False,
                                      token_stats)
         self.assertTrue(any("状态外置" in line for line in out))
+
+
+class RunAuditBillTests(unittest.TestCase):
+    def test_run_audit_payload_carries_the_bill_and_returns_blocks(self):
+        with tempfile.TemporaryDirectory() as directory:
+            transcript = Path(directory) / (
+                "3b241101-e2bb-4255-8caf-4136c566a962.jsonl")
+            transcript.write_text(
+                '{"type": "context.append_loop_event", "event": '
+                '{"type": "tool.call", "toolCallId": "c1", "name": "Read", '
+                '"args": {"path": "a"}}}\n'
+                '{"type": "context.append_loop_event", "event": '
+                '{"type": "tool.result", "toolCallId": "c1", "result": '
+                '{"output": "hello world"}}}\n',
+                encoding="utf-8")
+
+            original_cache_dir = web.CACHE_DIR
+            web.CACHE_DIR = Path(tempfile.mkdtemp())
+            try:
+                job = web.Job({"path": str(transcript)})
+                web.run_audit(job)
+            finally:
+                web.CACHE_DIR = original_cache_dir
+
+            self.assertEqual(job.status, "done")
+            bill = job.result["bill"]
+            self.assertEqual(sorted(bill),
+                             ["billed", "cost_rows", "est_subtotal",
+                              "notes", "routing"])
+            keys = [row["key"] for row in bill["cost_rows"]]
+            # the minimal transcript carries no usage telemetry, so the
+            # bucket-derived rows are omitted per the no-volume rule and
+            # only the two unconditional rows remain
+            self.assertEqual(keys, ["output", "cache_signal"])
+            self.assertEqual(job.result["subagent_returns"]["rows"], [])
+            self.assertTrue(
+                any("账单通道未接入" in note for note in bill["notes"]))
 
 
 if __name__ == "__main__":

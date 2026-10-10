@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 from urllib.parse import urlparse, parse_qs
 
+from .bill import build_bill
 from .catalog import load_catalog
 from .if_eval import IFResult, evaluate_playbook
 from .ir.schema import IR_VERSION
@@ -102,7 +103,9 @@ def fingerprint(session_path: str, judge_model: str) -> str:
     # v10 feeds the billed prompt series into turn_growth: v9 cached results
     # for billed CLI-shape logs (no transcript telemetry) lack the growth
     # rows and would keep rendering the "no context telemetry" gap note.
-    return "%.3f:%d:%s:v10:ir%s" % (newest, total, judge_model, IR_VERSION)
+    # v11 adds the bill + subagent_returns payload blocks (P0-1): v10
+    # cached results would render without the bill card.
+    return "%.3f:%d:%s:v11:ir%s" % (newest, total, judge_model, IR_VERSION)
 
 
 def cache_load(key: str, fp: str) -> Optional[dict]:
@@ -410,14 +413,28 @@ def discover_sessions(roots: Optional[List[str]] = None) -> List[dict]:
 
 
 SIDEBAR_LIMIT = 10
+SEARCH_LIMIT = 50
 
 
-def list_sessions(roots: Optional[List[str]] = None) -> dict:
+def list_sessions(
+    roots: Optional[List[str]] = None, query: Optional[str] = None
+) -> dict:
     """The most recent sessions for the sidebar. Parsing a session's log is
-    deferred to the audit job; this endpoint must stay instant."""
+    deferred to the audit job; this endpoint must stay instant.
+
+    ``query`` searches the full discovery result by session id or workspace,
+    because discovery finds far more sessions than the sidebar shows."""
     audited = cached_paths()
     all_sessions = discover_sessions(roots)
-    sessions = all_sessions[:SIDEBAR_LIMIT]
+    needle = (query or "").strip().lower()
+    if needle:
+        matches = [
+            s for s in all_sessions
+            if needle in s["id"].lower() or needle in s["workspace"].lower()
+        ]
+        sessions = matches[:SEARCH_LIMIT]
+    else:
+        sessions = all_sessions[:SIDEBAR_LIMIT]
     for s in sessions:
         s["cached"] = s["path"] in audited
     return {"sessions": sessions, "total": len(all_sessions), "fleet": None}
@@ -664,6 +681,7 @@ def run_audit(job: Job) -> None:
         # evidence-backed load ledger (IR 1.1) — the web layer previously
         # imported no IR.
         from .ir.analyses import skill_loads as skill_loads_rollup
+        from .ir.analyses import subagent_returns as subagent_returns_rollup
         from .ir.builder import build_audit_document
 
         adapter_id = _ir_adapter_id(session, source_path)
@@ -681,9 +699,17 @@ def run_audit(job: Job) -> None:
             }
             for name in expected
         ]
-        missed = [f["skill_name"] for f in judgments_to_dict(judgments)["missed"]]
+        judgments_block = judgments_to_dict(judgments)
+        missed = [f["skill_name"] for f in judgments_block["missed"]]
         load_block = skill_loads_rollup(document)
+        returns_block = subagent_returns_rollup(document)
         load_totals = load_block["totals"]
+        token_stats_block = tokenstats_to_dict(token_stats)
+        if_block = if_results_to_dict(if_results)
+        bill = build_bill(
+            token_stats_block, load_block, returns_block, expectations,
+            judgments_block, if_block, billed_series,
+            len(timeline.file_reads), adapter_id, judge_enabled)
         status_line = "%d loaded, %d file-read, %d missed triggers, IF %s, loads %d (%d costed, %d unavailable), reloads %d" % (
             len(timeline.loads),
             len(timeline.file_reads),
@@ -703,12 +729,14 @@ def run_audit(job: Job) -> None:
                 "events": len(session.events),
             },
             "timeline": timeline_to_dict(timeline),
-            "judgments": judgments_to_dict(judgments),
-            "if_results": if_results_to_dict(if_results),
+            "judgments": judgments_block,
+            "if_results": if_block,
             "expectations": expectations,
             "event_feed": event_feed_to_list(session),
-            "token_stats": tokenstats_to_dict(token_stats),
+            "token_stats": token_stats_block,
             "skill_loads": load_block,
+            "bill": bill,
+            "subagent_returns": returns_block,
             "no_self_invoke": sorted(
                 s.name for s in catalog if s.disable_model_invocation
             ),
@@ -795,7 +823,8 @@ class Handler(BaseHTTPRequestHandler):
         elif route.startswith("/static/"):
             self._send_file(WEBAPP_DIR / route[len("/static/"):])
         elif route == "/api/sessions":
-            self._send_json(200, list_sessions())
+            params = parse_qs(parsed.query)
+            self._send_json(200, list_sessions(query=(params.get("q") or [""])[0]))
         elif route == "/api/fleet":
             self._send_json(200, {"fleet": fleet_stats()})
         elif route.startswith("/api/job/"):
