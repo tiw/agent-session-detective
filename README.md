@@ -135,12 +135,13 @@ PYTHONPATH=src python3 -m agent_session_detective --serve --port 9000
 - **会话列表**：扫描 `~/.kimi-code/sessions` 和 `~/.kimi/sessions` 两个根目录，显示**最近 10 个**会话（工作区 + 时间 + 是否已审计）。列表只做文件发现（stat 级，毫秒级），不解析日志——轮数/skill/token 统计都在你点审计那一刻才算
 - **skill 目录**：表单里可追加任意多个 skill 目录（每行一个），用于把运行时真实可用的 skill 纳入审计范围——默认只扫 `~/.agents/skills` 和 `~/.kimi/skills`，harness 内置的 plugin skill 大多不在其中。输入时会实时显示每个目录贡献了多少 skill、目录是否存在（同名的按版本去重）。用户提供的目录会**递归**查找（plugin cache 是 `<vendor>/<plugin>/<version>/SKILL.md` 的嵌套布局），默认目录仍走一层 glob
 - **skill 原文注入**：表单里直接粘 JSON，手工提供 skill 的真实原文。同名条目**覆盖** catalog 里的解析结果（提供原文的目的就是纠正它），catalog 里没有的直接新增——这是把 harness 内置 skill 纳入审计的手段。`intent` 字段是你对「这个 skill 干什么」的说法，会给 judge 做参考，但报告里始终标注为人工提供，不会冒充日志事实。粘贴时即时校验：JSON 语法错误会当场提示，条目缺 `description` 且无 `body_path` 会被标出来（那类条目会被跳过）。命令行等价物是 `--injected PATH`
+- **catalog audit**：右上角按钮，**离线静态体检 skill catalog 本身**——不需要会话日志、不调用 LLM、不需要任何凭据，点一下就出四块结论：**体量分级**（激活一个 skill 要付多少 token，按 token 排序，超标的置顶）、**description 质量**（路由文案是否冗余/过短/根本没解析出来）、**分层有效性比值**（discovery 常驻 vs activation 潜在，量化「渐进式披露」这套机制本身划不划算）、**解析健康度**（哪些 skill 会因为缺路由依据而被误判）。表单里的 skill 目录和注入原文对它同样生效。**它和会话行为审计是两回事**：体检只说 catalog 的成本与缺陷，不评价 agent 表现，两份报告不合并成一个分数。阈值是经验值（500 行 / 300 字符），不是规范要求，命令行可覆盖
 - **fleet 汇总**：侧栏 `fleet` 按钮按需触发，跨会话聚合（会话数、平均轮数、平均缓存命中率、增长形状分布、重复注入总量）——「纠规则不纠个案」的入口；要解析全部日志，约 10 秒，期间页面可继续操作
 - **审计表单**：填 `--expect` 清单、选 playbook 做 IF 评估、勾选是否跑 missed-trigger 判定（LLM 部分后台线程执行，页面轮询进度）
 - **报告渲染**：expectations 核对表、findings、IF 逐步判定、skill 生命周期、事件流，与 CLI 版同一套数据形状
 - **事件流角色 badge**：每条事件标注 `user` / `think` / `say` / `tool` / `result` / `compact`，人的输入、模型思考、模型回复、工具 traffic 一眼分开
 
-JSON API 也可以独立使用（`GET /api/sessions`（最近 10 个，纯发现）、`GET /api/fleet`（按需全量聚合，慢）、`POST /api/scan-dirs`（预览每个目录贡献多少 skill）、`POST /api/audit`、`GET /api/job/<id>`、`GET /api/playbooks`），方便接进自己的工具链。
+JSON API 也可以独立使用（`GET /api/sessions`（最近 10 个，纯发现）、`GET /api/fleet`（按需全量聚合，慢）、`POST /api/scan-dirs`（预览每个目录贡献多少 skill）、`POST /api/catalog-audit`（离线静态体检，同 CLI 的 `catalog-audit`）、`POST /api/audit`、`GET /api/job/<id>`、`GET /api/playbooks`），方便接进自己的工具链。
 
 > ⚠️ 服务无鉴权，只绑定 `127.0.0.1`，不要暴露到公网。
 
@@ -180,6 +181,28 @@ JSON API 也可以独立使用（`GET /api/sessions`（最近 10 个，纯发现
 
 > ⚠️ **默认根目录的坑**：`--sessions-root` 默认是 `~/.kimi/sessions`（CLI 格式日志）。桌面版 kimi-code 的会话在 `~/.kimi-code/sessions/`，需要显式指定：
 > `--sessions-root ~/.kimi-code/sessions`
+
+### `asd catalog-audit` —— 离线静态体检
+
+单独体检 skill catalog 本身，**不需要会话日志、不调用 LLM、不需要任何凭据**，因此可以进 CI：
+
+```bash
+asd catalog-audit                          # 体检默认目录
+asd catalog-audit --skills-dir ~/plugins   # 追加目录
+asd catalog-audit --json                   # 机器可读
+asd catalog-audit --max-lines 800          # 覆盖约定阈值
+```
+
+四块输出：
+
+| 区块 | 回答的问题 |
+|---|---|
+| 分层有效性 | 只付 discovery 常驻的 token，换来多少 activation 潜力（比值越小分层越有效） |
+| 解析健康度 | 哪些 skill 会因为 description 没解析出来、审计时缺少路由依据而被误判 |
+| 体量分级 | 激活一个 skill 要付多少 token，哪些超标该拆成 references |
+| description 质量 | 哪些路由文案冗余（稀释信噪比）或过短（无法路由） |
+
+两点边界：**阈值是经验值不是规范要求**（500 行 / 300 字符，可用 `--max-lines` / `--large-lines` / `--min-desc` / `--max-desc` 覆盖），**体检不评价 agent 表现**——那是 `asd <session>` 的职责，两份报告不合并成一个分数。token 数字是估算值（与 IR 同一个版本化估算器），不是 harness 的真实计费。
 
 ---
 

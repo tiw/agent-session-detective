@@ -35,6 +35,8 @@
       <h1 id="audit-title">pick a session</h1>
       <a class="btn small" id="tree-link" href="#" target="_blank" rel="noopener" hidden
          title="该会话实际执行的 skill 调用树（从 IR 文档渲染的独立页面）">skill tree</a>
+      <button class="btn small" id="catalog-audit-btn" type="button"
+         title="离线体检 skill catalog 本身：体量分级 / description 质量 / 分层有效性 / 解析健康度。不需要会话日志、不调用 LLM，结论与行为审计相互独立">catalog audit</button>
     </div>
 
     <form class="audit-form" id="audit-form" hidden>
@@ -78,6 +80,17 @@
     <div class="progress" id="progress" hidden>
       <div class="steps" id="steps"></div>
     </div>
+
+    <section class="catalog-audit" id="catalog-audit" hidden>
+      <div class="catalog-head">
+        <h2>catalog 静态体检</h2>
+        <span class="dim">离线 · 零 LLM · 不需要会话日志 · 与上方行为审计相互独立</span>
+        <button class="btn small ghost" id="catalog-audit-close" type="button">收起</button>
+      </div>
+      <div class="catalog-body" id="catalog-audit-body">
+        <p class="dim">点右上角「catalog audit」开始体检。</p>
+      </div>
+    </section>
 
     <div id="report"></div>
   </main>

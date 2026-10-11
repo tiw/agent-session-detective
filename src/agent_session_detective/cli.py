@@ -37,8 +37,16 @@ DEFAULT_SESSIONS_ROOT = "~/.kimi/sessions"
 DEFAULT_QODER_PROJECTS_ROOT = "~/.qoder/projects"
 DEFAULT_CODEX_SESSIONS_ROOT = "~/.codex/sessions"
 
+# Subcommand names dispatched before the session parser runs. The session
+# argument is positional, so without this check "asd catalog-audit" would be
+# read as a session path named "catalog-audit".
+SUBCOMMANDS = ("catalog-audit",)
+
 
 def main(argv=None) -> int:
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if argv and argv[0] in SUBCOMMANDS:
+        return _run_catalog_audit(argv[1:])
     parser = argparse.ArgumentParser(
         prog="asd",
         description="Audit an agent session against its skills and render an HTML report.",
@@ -257,6 +265,85 @@ def _write_json(path: Path, payload) -> None:
         json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
     )
     print(path)
+
+
+def _run_catalog_audit(argv: List[str]) -> int:
+    """``asd catalog-audit`` — static catalog check, no session required.
+
+    Deliberately separate from the session audit: it runs offline with no LLM
+    and says nothing about how any agent behaved. It answers what a skill
+    costs to keep resident and what it costs to activate.
+    """
+    from .catalog_audit import (
+        DEFAULT_LARGE_LINES,
+        DEFAULT_MAX_DESC_CHARS,
+        DEFAULT_MAX_LINES,
+        DEFAULT_MIN_DESC_CHARS,
+        audit_catalog,
+        render_audit,
+    )
+
+    parser = argparse.ArgumentParser(
+        prog="asd catalog-audit",
+        description="Static health check of the skill catalog: size tiers, "
+                    "description quality, layering ratio, parse health. "
+                    "Runs offline — no session log, no LLM.",
+    )
+    parser.add_argument("--skills-dir", action="append", default=None,
+                        help="Extra skill directory to include in the catalog "
+                             "(repeatable).")
+    parser.add_argument("--injected", default=None, metavar="PATH",
+                        help="JSON file of externally supplied skill text. "
+                             "Injected entries are measured on their own terms "
+                             "and marked as injected in the output.")
+    parser.add_argument("--max-lines", type=int, default=DEFAULT_MAX_LINES,
+                        help="Conventional threshold: above this many lines a "
+                             "skill is oversize (default: %(default)s).")
+    parser.add_argument("--large-lines", type=int, default=DEFAULT_LARGE_LINES,
+                        help="Conventional threshold: above this many lines a "
+                             "skill is large (default: %(default)s).")
+    parser.add_argument("--min-desc", type=int, default=DEFAULT_MIN_DESC_CHARS,
+                        help="Conventional threshold: below this many "
+                             "characters a description is too terse to route on "
+                             "(default: %(default)s).")
+    parser.add_argument("--max-desc", type=int, default=DEFAULT_MAX_DESC_CHARS,
+                        help="Conventional threshold: above this many "
+                             "characters a description is verbose (default: "
+                             "%(default)s).")
+    parser.add_argument("--top", type=int, default=10,
+                        help="How many entries to list per section; 0 lists all "
+                             "(default: %(default)s).")
+    parser.add_argument("--json", action="store_true",
+                        help="Emit the audit as JSON instead of text.")
+    parser.add_argument("--out", default=None, metavar="PATH",
+                        help="Write the report to this path instead of stdout.")
+    args = parser.parse_args(argv)
+
+    catalog = load_catalog(extra_dirs=args.skills_dir)
+    injected = load_injected(Path(args.injected)) if args.injected else []
+    if args.injected and not injected:
+        print("No usable entries in %s; auditing the scanned catalog only."
+              % args.injected, file=sys.stderr)
+    if injected:
+        catalog = merge_catalog(catalog, injected)
+
+    audit = audit_catalog(
+        catalog,
+        max_lines=args.max_lines,
+        large_lines=args.large_lines,
+        min_desc_chars=args.min_desc,
+        max_desc_chars=args.max_desc,
+    )
+    if args.json:
+        text = json.dumps(audit.to_dict(), ensure_ascii=False, indent=2)
+    else:
+        text = render_audit(audit, top=max(args.top, 0))
+    if args.out:
+        Path(args.out).expanduser().write_text(text, encoding="utf-8")
+        print(args.out)
+    else:
+        print(text)
+    return 0
 
 
 def _detect_adapter(session: Session, source: Path) -> str:

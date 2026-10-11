@@ -961,5 +961,92 @@ class RunAuditBillTests(unittest.TestCase):
                 any("账单通道未接入" in note for note in bill["notes"]))
 
 
+class CatalogAuditEndpointTests(unittest.TestCase):
+    """The web panel runs the same measurement as ``asd catalog-audit``.
+
+    Static, offline, and independent of any session: it needs no log, no
+    judge, and no credentials, and it makes no claim about agent behaviour.
+    """
+
+    def _skill(self, root: Path, name: str, description: str = "A real one.",
+               body_lines: int = 10) -> None:
+        d = root / name
+        d.mkdir(parents=True)
+        body = "\n".join("body line %d" % i for i in range(body_lines))
+        (d / "SKILL.md").write_text(
+            "---\nname: %s\ndescription: %s\n---\n%s\n" % (name, description, body),
+            encoding="utf-8")
+
+    def test_returns_all_four_blocks(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            self._skill(base, "alpha", "x" * 400, body_lines=900)
+            with patch("agent_session_detective.catalog.DEFAULT_SKILL_DIRS", ()):
+                out = web.run_catalog_audit({"skills_dirs": [str(base)]})
+        self.assertEqual(out["total"], 1)
+        self.assertEqual(out["size_tiers"]["oversize"], 1)
+        self.assertEqual(out["desc_tiers"]["verbose"], 1)
+        self.assertEqual(out["parse_failures"], [])
+        self.assertIsNotNone(out["ratio"])
+
+    def test_runs_with_no_session_no_judge_and_no_params(self):
+        with patch("agent_session_detective.catalog.DEFAULT_SKILL_DIRS", ()):
+            out = web.run_catalog_audit({})
+        self.assertIn("total", out)
+        self.assertIn("thresholds", out)
+        self.assertIn("estimator", out)
+
+    def test_threshold_overrides_from_the_request_are_honoured(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            self._skill(base, "alpha", body_lines=900)
+            with patch("agent_session_detective.catalog.DEFAULT_SKILL_DIRS", ()):
+                out = web.run_catalog_audit({"skills_dirs": [str(base)],
+                                             "max_lines": 5000})
+        self.assertEqual(out["thresholds"]["max_lines"], 5000)
+        self.assertEqual(out["size_tiers"]["oversize"], 0)
+
+    def test_absurd_threshold_falls_back_instead_of_grading_everything(self):
+        # A zero/negative threshold would mark every skill a defect and read
+        # as a real finding, so it is treated as a bad request.
+        with patch("agent_session_detective.catalog.DEFAULT_SKILL_DIRS", ()):
+            out = web.run_catalog_audit({"max_lines": 0})
+        self.assertEqual(out["thresholds"]["max_lines"], 500)
+
+    def test_non_numeric_threshold_falls_back(self):
+        with patch("agent_session_detective.catalog.DEFAULT_SKILL_DIRS", ()):
+            out = web.run_catalog_audit({"max_desc_chars": "abc"})
+        self.assertEqual(out["thresholds"]["max_desc_chars"], 300)
+
+    def test_injected_entry_without_body_is_disclosed_not_counted_as_zero(self):
+        injected = json.dumps({"ghost": {"description": "Supplied routing text."}})
+        with patch("agent_session_detective.catalog.DEFAULT_SKILL_DIRS", ()):
+            out = web.run_catalog_audit({"injected": injected})
+        self.assertEqual(out["total"], 1)
+        self.assertEqual(out["no_body"], ["ghost"])
+        self.assertEqual(out["body_count"], 0)
+        self.assertEqual(out["injected_count"], 1)
+
+    def test_malformed_injected_payload_still_returns_an_audit(self):
+        with patch("agent_session_detective.catalog.DEFAULT_SKILL_DIRS", ()):
+            out = web.run_catalog_audit({"injected": "{not json"})
+        self.assertEqual(out["injected_count"], 0)
+        self.assertIn("total", out)
+
+    def test_lists_are_capped_for_the_panel(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            for i in range(30):
+                self._skill(base, "s%02d" % i)
+            with patch("agent_session_detective.catalog.DEFAULT_SKILL_DIRS", ()):
+                out = web.run_catalog_audit({"skills_dirs": [str(base)]})
+        self.assertEqual(out["total"], 30)
+        self.assertEqual(len(out["top"]), 20)
+
+    def test_endpoint_rejects_a_non_object_payload(self):
+        with self.assertRaises(Exception):
+            web.run_catalog_audit(["not", "a", "dict"])
+
+
 if __name__ == "__main__":
     unittest.main()

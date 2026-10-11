@@ -150,10 +150,54 @@ description 质量
   >300 字符 32 个 / <50 字符 7 个
 ```
 
+> **这段示例数字已被实测推翻，保留仅作历史记录。** 实现后按真实的
+> 123 个 skill 重算：`discovery=7649`、`activation=286931`、比值 `37.5:1`、
+> 解析失败 `1` 个。即 `activation` 与比值对得上，**唯独 `discovery` 差 3.8 倍**，
+> 说明 28k 与它自己写的 38:1 本就不自洽（若真是 28k，比值应为 9.8:1）。
+> 这正是本项目要标注为 inference 而非 fact 的那类预估数字。
+
 ---
 
-## 待确认
+## 5. 实现状态（已落地）
 
-1. 第一版是否就只做 A？还是希望连B 的 2.1/2.2 一起？
-2. 阈值（500 行 / 300 字符）沿用报告的经验值，还是你有别的基准？
-3. 输出形态：CLI 文本即可，还是也要进HTML 报告 / web UI？
+第一版按 §2 的结论只做 A（catalog 静态体检），已全部实现：
+
+| 步骤 | 状态 | 位置 |
+|---|---|---|
+| 1.1 体量分级（约定阈值，可覆盖） | ✅ | `catalog_audit.py` `SizeEntry` / `_size_tier` |
+| 1.2 description 质量分级 | ✅ | `catalog_audit.py` `DescEntry` / `_desc_tier` |
+| 1.3 分层有效性比值 | ✅ | `audit_catalog()` 的 `discovery_tokens` / `ratio` |
+| 1.4 解析健康度 | ✅ | 复用 `catalog.parse_failures()` |
+| CLI `asd catalog-audit` | ✅ | `cli.py` `_run_catalog_audit`，`--json` / `--top` / 阈值覆盖 |
+| Web 面板 | ✅ | `POST /api/catalog-audit` + 右上角「catalog audit」面板 |
+
+实测 52 个新测试（`test_catalog_audit.py` 19 / `test_cli_catalog_audit.py` 10 /
+`test_web.py` 9 + 其余），全量 574 通过。
+
+### 实现时确认的三条约束
+
+1. **token 估算必须走 `ir.estimator.estimate`**，不能直引 `timeline.estimate_tokens`
+   ——后者会绕过 `ESTIMATOR_VERSION`，违反「one estimator in the codebase」。
+   审计结果里始终打印估算器版本号。
+2. **注入条目无正文时不计入 activation**。`_injected_skill()` 无 `body_path` 时
+   `path` 是哨兵 `Path("<injected>")`，`read_text()` 必抛 `OSError`；若不显式跳过，
+   要么崩溃、要么被算成 0 行从而拉低比值——0 会被读成「这个 skill 很小」。
+   现在这类条目进 `no_body` 列表并在输出里显式披露。这正是 §3「不伪造 activation
+   token」在实现层的落点。
+3. **CLI 靠 `argv[0]` 预判分流**，没有引入 `add_subparsers`。`session` 是位置参数，
+   否则 `asd catalog-audit` 会被解析成「一个叫 catalog-audit 的会话路径」。
+   保持平铺结构也就不用动现有 `asd <session>` 的参数约定。
+
+### 仍未做（明确推到后续）
+
+- **B（单会话披露追踪）**：2.1 discovery 沉没成本、2.2 层级跃迁违例、2.3 披露税。
+  2.2 依赖的时点数据（`execution` 观测）已就位。
+- **C（跨会话披露趋势）**：需要落库，v2。
+- **L1/L3 的完整验证**：本命令只做 catalog 静态体检，
+  **不验证 harness 的披露实现**（§3 红线 1 仍然成立）。
+
+## 待确认（已按默认答案落地）
+
+1. ~~第一版是否就只做 A？~~ **是。** B 的 2.1/2.2 推到下一版。
+2. ~~阈值沿用报告经验值？~~ **沿用** 500 行 / 300 字符，但标注为「约定阈值」并全部可覆盖。
+3. ~~输出形态？~~ **CLI 文本 + web UI 面板都做了**，JSON 输出作为第三种形态。

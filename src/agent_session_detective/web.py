@@ -25,6 +25,13 @@ from .catalog import (
     parse_failures,
     parse_injected,
 )
+from .catalog_audit import (
+    DEFAULT_LARGE_LINES,
+    DEFAULT_MAX_DESC_CHARS,
+    DEFAULT_MAX_LINES,
+    DEFAULT_MIN_DESC_CHARS,
+    audit_catalog,
+)
 from .if_eval import IFResult, evaluate_playbook
 from .ir.schema import IR_VERSION
 from .judge import Judge, Judgment, judge_session
@@ -674,6 +681,50 @@ def scan_skill_dirs(dirs: List[str]) -> dict:
     return {"dirs": entries, "skills": total}
 
 
+def run_catalog_audit(params: dict) -> dict:
+    """Static catalog check for the web form.
+
+    Same measurement the ``asd catalog-audit`` command makes, so the two can
+    never disagree. Takes the same directory and injection inputs as a normal
+    audit — the form collects them once — but needs no session log, no judge,
+    and no credentials.
+    """
+    dirs = params.get("skills_dirs") or []
+    skill_dirs = [Path(d).expanduser() for d in dirs if isinstance(d, str) and d.strip()]
+    catalog = load_catalog(extra_dirs=skill_dirs)
+    injected = _injected_for(params)
+    if injected:
+        catalog = merge_catalog(catalog, injected)
+
+    def _threshold(name: str, default: int, floor: int) -> int:
+        raw = params.get(name)
+        try:
+            value = int(raw)
+        except (TypeError, ValueError):
+            return default
+        # A threshold below the floor would grade everything as a defect and
+        # read as a real finding, so an out-of-range value falls back.
+        return value if value >= floor else default
+
+    audit = audit_catalog(
+        catalog,
+        max_lines=_threshold("max_lines", DEFAULT_MAX_LINES, 1),
+        large_lines=_threshold("large_lines", DEFAULT_LARGE_LINES, 0),
+        min_desc_chars=_threshold("min_desc_chars", DEFAULT_MIN_DESC_CHARS, 0),
+        max_desc_chars=_threshold("max_desc_chars", DEFAULT_MAX_DESC_CHARS, 1),
+    )
+    payload = audit.to_dict()
+    payload["skills_dirs"] = [str(d) for d in skill_dirs]
+    payload["injected_count"] = len(injected)
+    payload["top"] = [
+        e.to_dict() for e in audit.size[:20]
+    ]
+    payload["desc_top"] = [
+        e.to_dict() for e in audit.descriptions if e.tier != "ok"
+    ][:20]
+    return payload
+
+
 def _injected_fingerprint(params: dict) -> str:
     """Identity of the supplied skill text, for cache separation.
 
@@ -950,15 +1001,22 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         parsed = urlparse(self.path)
-        if parsed.path == "/api/scan-dirs":
+        if parsed.path in ("/api/scan-dirs", "/api/catalog-audit"):
             length = int(self.headers.get("Content-Length", 0))
             try:
                 payload = json.loads(self.rfile.read(length) or b"{}")
             except json.JSONDecodeError:
                 self._send_json(400, {"error": "bad json"})
                 return
-            dirs = payload.get("dirs") or []
-            self._send_json(200, scan_skill_dirs(dirs if isinstance(dirs, list) else []))
+            if not isinstance(payload, dict):
+                self._send_json(400, {"error": "bad payload"})
+                return
+            if parsed.path == "/api/scan-dirs":
+                dirs = payload.get("dirs") or []
+                self._send_json(
+                    200, scan_skill_dirs(dirs if isinstance(dirs, list) else []))
+                return
+            self._send_json(200, run_catalog_audit(payload))
             return
         if parsed.path != "/api/audit":
             self._send_json(404, {"error": "not found"})

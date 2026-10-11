@@ -383,6 +383,173 @@
     return true;
   }
 
+  // ------------------------------------------------------------------
+  // catalog audit: static check of the catalog itself. Deliberately not
+  // part of the session audit — it needs no session, no judge, and says
+  // nothing about how any agent behaved.
+  // ------------------------------------------------------------------
+
+  var catalogBtn = document.getElementById("catalog-audit-btn");
+  var catalogPanel = document.getElementById("catalog-audit");
+  var catalogBody = document.getElementById("catalog-audit-body");
+  var catalogClose = document.getElementById("catalog-audit-close");
+
+  if (catalogClose) {
+    catalogClose.addEventListener("click", function () {
+      catalogPanel.hidden = true;
+    });
+  }
+
+  var TIER_TEXT = {
+    oversize: "超标", large: "偏大", ok: "OK",
+    verbose: "冗余", terse: "过短", unusable: "解析失败",
+  };
+
+  function kfmt(n) {
+    return n >= 10000 ? (n / 1000).toFixed(1) + "k" : String(n);
+  }
+
+  function auditRows(entries, cols) {
+    if (!entries.length) return '<p class="dim">无</p>';
+    var out = "<table class='audit-table'><thead><tr>";
+    cols.forEach(function (c) { out += "<th>" + c.label + "</th>"; });
+    out += "</tr></thead><tbody>";
+    entries.forEach(function (e) {
+      out += "<tr>";
+      cols.forEach(function (c) {
+        var v = c.get(e);
+        out += "<td class='" + (c.cls ? c.cls(e) : "") + "'>" + v + "</td>";
+      });
+      out += "</tr>";
+    });
+    return out + "</tbody></table>";
+  }
+
+  function tierBadge(tier) {
+    var cls = tier === "ok" ? "ok" : (tier === "large" || tier === "terse" ? "warn" : "bad");
+    return "<span class='tier " + cls + "'>" + (TIER_TEXT[tier] || tier) + "</span>";
+  }
+
+  function injectedMark(e) {
+    return e.source === "injected" ? " <span class='dim'>（注入）</span>" : "";
+  }
+
+  function renderCatalogAudit(d) {
+    var h = "";
+    h += "<div class='catalog-summary'>";
+    h += "<div><span class='k'>" + d.total + "</span><span class='l'>skills</span></div>";
+    h += "<div><span class='k'>" + d.body_count + "</span><span class='l'>有正文</span></div>";
+    if (d.no_body && d.no_body.length) {
+      h += "<div><span class='k'>" + d.no_body.length +
+           "</span><span class='l'>无正文，未计 activation</span></div>";
+    }
+    if (d.injected_count) {
+      h += "<div><span class='k'>" + d.injected_count +
+           "</span><span class='l'>人工注入</span></div>";
+    }
+    h += "</div>";
+
+    // Layering ratio: the headline number — what disclosure costs, and what
+    // it buys.
+    h += "<section class='catalog-block'>";
+    h += "<h3>分层有效性</h3>";
+    if (d.ratio === null || d.ratio === undefined) {
+      h += "<p class='dim'>没有可用的 description，无法计算比值。</p>";
+    } else {
+      h += "<div class='ratio'>";
+      h += "<div class='ratio-col'><span class='k'>" + kfmt(d.discovery_tokens) +
+           "</span><span class='l'>discovery 常驻（Σ description）</span></div>";
+      h += "<div class='ratio-col'><span class='k'>" + kfmt(d.activation_tokens) +
+           "</span><span class='l'>activation 潜在（Σ 整份）</span></div>";
+      h += "<div class='ratio-col'><span class='k'>" + d.ratio.toFixed(1) +
+           ":1</span><span class='l'>比值越小，分层越有效</span></div>";
+      h += "</div>";
+    }
+    h += "</section>";
+
+    // Parse health first among the findings: a skill audited on a broken
+    // description is silently mis-scored, so it outranks a size complaint.
+    h += "<section class='catalog-block'>";
+    h += "<h3>解析健康度</h3>";
+    if (!d.parse_failures.length) {
+      h += "<p class='ok-text'>✓ 全部 description 均可解析</p>";
+    } else {
+      h += "<p class='bad-text'>✗ " + d.parse_failures.length +
+           " 个 description 解析失败——审计时缺少路由依据</p>";
+      h += auditRows(d.parse_failures, [
+        { label: "skill", get: function (e) { return esc(e.name) + injectedMark(e); } },
+        { label: "description", get: function (e) {
+            return e.sample ? "<code>" + esc(e.sample) + "</code>" : "<span class='dim'>（空）</span>";
+          } },
+      ]);
+    }
+    h += "</section>";
+
+    h += "<section class='catalog-block'>";
+    h += "<h3>体量分级</h3>";
+    h += "<p class='dim'>约定阈值：&gt;" + d.thresholds.max_lines + " 行超标 / " +
+         d.thresholds.large_lines + "-" + d.thresholds.max_lines +
+         " 偏大 —— 经验值，非规范要求</p>";
+    h += "<p>超标 <b>" + d.size_tiers.oversize + "</b> · 偏大 <b>" + d.size_tiers.large +
+         "</b> · OK <b>" + d.size_tiers.ok + "</b>（按 token 排序，最多显示 " +
+         (d.top ? d.top.length : 0) + " 个）</p>";
+    h += auditRows(d.top || [], [
+      { label: "skill", get: function (e) { return esc(e.name) + injectedMark(e); } },
+      { label: "行数", get: function (e) { return String(e.lines); },
+        cls: function (e) { return e.tier === "oversize" ? "bad" : ""; } },
+      { label: "token", get: function (e) { return kfmt(e.tokens); } },
+      { label: "分级", get: function (e) { return tierBadge(e.tier); } },
+    ]);
+    h += "</section>";
+
+    h += "<section class='catalog-block'>";
+    h += "<h3>description 质量</h3>";
+    h += "<p class='dim'>约定阈值：" + d.thresholds.min_desc_chars + "-" +
+         d.thresholds.max_desc_chars + " 字符为佳 —— 经验值，非规范要求</p>";
+    h += "<p>冗余 <b>" + d.desc_tiers.verbose + "</b> · 过短 <b>" + d.desc_tiers.terse +
+         "</b> · 解析失败 <b>" + d.desc_tiers.unusable + "</b> · 合格 <b>" +
+         d.desc_tiers.ok + "</b></p>";
+    h += auditRows(d.desc_top || [], [
+      { label: "skill", get: function (e) { return esc(e.name) + injectedMark(e); } },
+      { label: "字符", get: function (e) { return String(e.chars); } },
+      { label: "分级", get: function (e) { return tierBadge(e.tier); } },
+      { label: "开头", get: function (e) {
+          return "<span class='dim'>" + esc(e.sample.slice(0, 90)) + "</span>";
+        } },
+    ]);
+    h += "</section>";
+
+    h += "<p class='dim tiny'>token 估算器 " + esc(d.estimator) +
+         " · 估算值，非 harness 真实计费 · 静态体检不评价 agent 表现</p>";
+    return h;
+  }
+
+  function runCatalogAudit() {
+    if (!catalogPanel || !catalogBody) return;
+    catalogPanel.hidden = false;
+    catalogBody.innerHTML = "<p class='dim'>体检中…</p>";
+    fetch("/api/catalog-audit", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        skills_dirs: collectDirs(),
+        injected: collectInjected(),
+      }),
+    }).then(function (r) { return r.json(); }).then(function (data) {
+      if (data && data.error) {
+        catalogBody.innerHTML = "<p class='bad-text'>体检失败：" + esc(data.error) + "</p>";
+        return;
+      }
+      catalogBody.innerHTML = renderCatalogAudit(data);
+    }).catch(function (e) {
+      catalogBody.innerHTML = "<p class='bad-text'>体检失败：" + esc(e.message) + "</p>";
+    });
+  }
+
+  if (catalogBtn) {
+    catalogBtn.addEventListener("click", runCatalogAudit);
+  }
+
   auditForm.addEventListener("submit", function (ev) {
     ev.preventDefault();
     if (!currentSession) return;
