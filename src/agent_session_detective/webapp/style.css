@@ -224,6 +224,22 @@ h1 { font-size: 15px; margin: 0; text-transform: lowercase; letter-spacing: 0.08
 }
 .audit-form input:focus, .audit-form select:focus { outline: none; border-color: var(--accent); }
 
+/* skill dirs: one path per line, so the field takes a row of its own */
+.audit-form label.wide { flex: 1 1 100%; }
+.audit-form textarea {
+  font: inherit; font-family: var(--mono); font-size: 12px; color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 7px 10px;
+  resize: vertical;
+  min-height: 48px;
+}
+.audit-form textarea:focus { outline: none; border-color: var(--accent); }
+.dir-status { font-size: 11px; line-height: 1.5; }
+.dir-status.ok { color: var(--dim); }
+.dir-status.warn { color: var(--warn, var(--accent)); }
+
 /* progress: narrative steps, no bar */
 .progress { margin: 10px 0 18px; }
 

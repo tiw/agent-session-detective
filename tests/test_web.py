@@ -484,6 +484,230 @@ class CacheKeyTests(unittest.TestCase):
         self.assertNotEqual(web.cache_key(base),
                             web.cache_key({**base, "billed": True}))
 
+    def test_scanned_skill_dirs_change_the_cache_key(self):
+        # The catalog is part of the result, so two runs differing only in
+        # which directories were scanned must not share a cache entry.
+        base = {"path": "/tmp/x.jsonl", "expect": None, "steps": None,
+                "judge_triggers": False}
+        self.assertNotEqual(
+            web.cache_key(base),
+            web.cache_key({**base, "skills_dirs": ["/tmp/skills"]}))
+
+    def test_identical_skill_dirs_reuse_the_same_cache_key(self):
+        base = {"path": "/tmp/x.jsonl", "skills_dirs": ["/tmp/a", "/tmp/b"]}
+        same = {"path": "/tmp/x.jsonl", "skills_dirs": ["/tmp/b", "/tmp/a"]}
+        self.assertEqual(web.cache_key(base), web.cache_key(same))
+
+
+class ScanSkillDirsTests(unittest.TestCase):
+    """The audit form previews what each typed directory contributes, so a
+    typo is distinguishable from a directory that simply has no skills."""
+
+    def _skill(self, root: Path, name: str, description: str = "A real one."):
+        d = root / name
+        d.mkdir(parents=True)
+        (d / "SKILL.md").write_text(
+            "---\nname: %s\ndescription: %s\n---\nBody.\n" % (name, description),
+            encoding="utf-8")
+        return d
+
+    def test_counts_flat_skills(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            self._skill(base, "alpha")
+            self._skill(base, "beta")
+
+            out = web.scan_skill_dirs([str(base)])
+
+            self.assertEqual(out["skills"], 2)
+            self.assertTrue(out["dirs"][0]["exists"])
+            self.assertEqual(out["dirs"][0]["parse_failures"], 0)
+
+    def test_finds_skills_nested_like_a_plugin_cache(self):
+        # Plugin caches keep skills at <vendor>/<plugin>/<version>/SKILL.md;
+        # a flat glob would report 0 and look like a broken path.
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            self._skill(base / "vendor" / "plugin" / "1.0.0", "nested")
+
+            out = web.scan_skill_dirs([str(base)])
+
+            self.assertEqual(out["skills"], 1)
+            self.assertEqual(out["dirs"][0]["names"], ["nested"])
+
+    def test_versioned_duplicates_collapse_to_one_skill(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            self._skill(base / "vendor" / "plugin" / "1.0.0", "duped")
+            self._skill(base / "vendor" / "plugin" / "2.0.0", "duped")
+
+            out = web.scan_skill_dirs([str(base)])
+
+            self.assertEqual(out["skills"], 1)
+
+    def test_missing_path_is_reported_as_absent_not_empty(self):
+        out = web.scan_skill_dirs(["/no/such/dir"])
+
+        self.assertFalse(out["dirs"][0]["exists"])
+        self.assertEqual(out["dirs"][0]["skills"], 0)
+
+    def test_blank_entries_are_skipped(self):
+        out = web.scan_skill_dirs(["", "   "])
+        self.assertEqual(out["dirs"], [])
+
+    def test_unparsable_description_is_counted(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            self._skill(base, "nodesc", description="")
+
+            out = web.scan_skill_dirs([str(base)])
+
+            self.assertEqual(out["dirs"][0]["parse_failures"], 1)
+
+
+class InjectedSkillTextTests(unittest.TestCase):
+    """The web form pastes skill text inline rather than naming a file, so the
+    audit path has to accept the JSON as a string."""
+
+    INLINE = ('{"cloud-service": {"description": "Sites need a backend.", '
+              '"intent": "接入托管后端"}}')
+
+    def test_inline_json_string_is_parsed(self):
+        skills = web._injected_for({"injected": self.INLINE})
+        self.assertEqual([s.name for s in skills], ["cloud-service"])
+        self.assertEqual(skills[0].intent, "接入托管后端")
+        self.assertTrue(skills[0].is_injected)
+
+    def test_inline_object_is_accepted_too(self):
+        skills = web._injected_for({"injected": {"a": {"description": "A."}}})
+        self.assertEqual([s.name for s in skills], ["a"])
+
+    def test_malformed_inline_json_degrades_to_nothing(self):
+        # A typo in the pasted text must not take the whole audit down.
+        self.assertEqual(web._injected_for({"injected": "{bad json"}), [])
+
+    def test_absent_injection_is_empty(self):
+        self.assertEqual(web._injected_for({}), [])
+        self.assertEqual(web._injected_for({"injected": "  "}), [])
+
+    def test_path_form_still_works(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "truth.json"
+            path.write_text(self.INLINE, encoding="utf-8")
+            skills = web._injected_for({"injected_path": str(path)})
+        self.assertEqual([s.name for s in skills], ["cloud-service"])
+
+
+class InjectedCacheKeyTests(unittest.TestCase):
+    """Injected text becomes catalog content, so it has to separate cache
+    entries — but cosmetic reformatting of the same payload should not."""
+
+    BASE = {"path": "/tmp/x.jsonl"}
+    A = '{"a": {"description": "One."}}'
+    REFORMATTED = '{\n  "a": {\n    "description": "One."\n  }\n}'
+
+    def test_injection_changes_the_cache_key(self):
+        self.assertNotEqual(web.cache_key(self.BASE),
+                            web.cache_key({**self.BASE, "injected": self.A}))
+
+    def test_different_content_changes_the_cache_key(self):
+        self.assertNotEqual(
+            web.cache_key({**self.BASE, "injected": self.A}),
+            web.cache_key({**self.BASE, "injected": '{"a": {"description": "Two."}}'}))
+
+    def test_reformatting_the_same_payload_keeps_the_cache_key(self):
+        self.assertEqual(
+            web.cache_key({**self.BASE, "injected": self.A}),
+            web.cache_key({**self.BASE, "injected": self.REFORMATTED}))
+
+    def test_entry_order_keeps_the_cache_key(self):
+        two = '{"a": {"description": "A."}, "b": {"description": "B."}}'
+        reordered = '{"b": {"description": "B."}, "a": {"description": "A."}}'
+        self.assertEqual(
+            web.cache_key({**self.BASE, "injected": two}),
+            web.cache_key({**self.BASE, "injected": reordered}))
+
+
+class RunAuditInjectedTests(unittest.TestCase):
+    def _transcript(self, directory):
+        transcript = Path(directory) / "s.jsonl"
+        transcript.write_text(
+            '{"type": "context.append_loop_event", "event": '
+            '{"type": "tool.call", "toolCallId": "c1", "name": "Read", '
+            '"args": {"path": "a"}}}\n'
+            '{"type": "context.append_loop_event", "event": '
+            '{"type": "tool.result", "toolCallId": "c1", "result": '
+            '{"output": "hello world"}}}\n',
+            encoding="utf-8")
+        return transcript
+
+    def test_audit_merges_injected_skills_and_reports_the_count(self):
+        with tempfile.TemporaryDirectory() as directory:
+            transcript = self._transcript(directory)
+            original_cache_dir = web.CACHE_DIR
+            web.CACHE_DIR = Path(tempfile.mkdtemp())
+            try:
+                job = web.Job({
+                    "path": str(transcript),
+                    "injected": '{"cloud-service": {"description": "Backend."}}',
+                })
+                web.run_audit(job)
+            finally:
+                web.CACHE_DIR = original_cache_dir
+
+            self.assertEqual(job.status, "done")
+            self.assertEqual(job.result["injected_count"], 1)
+            self.assertEqual(job.result["catalog_size"],
+                             len(web.load_catalog()) + 1)
+
+    def test_audit_without_injection_reports_zero(self):
+        with tempfile.TemporaryDirectory() as directory:
+            transcript = self._transcript(directory)
+            original_cache_dir = web.CACHE_DIR
+            web.CACHE_DIR = Path(tempfile.mkdtemp())
+            try:
+                job = web.Job({"path": str(transcript)})
+                web.run_audit(job)
+            finally:
+                web.CACHE_DIR = original_cache_dir
+
+            self.assertEqual(job.status, "done")
+            self.assertEqual(job.result["injected_count"], 0)
+
+
+class ScanDirsRouteTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        import threading
+
+        cls.server = ThreadingHTTPServer(("127.0.0.1", 0), web.Handler)
+        cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
+        cls.thread.start()
+        cls.base = "http://127.0.0.1:%d" % cls.server.server_address[1]
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server.shutdown()
+        cls.server.server_close()
+
+    def _post(self, payload):
+        request = urllib.request.Request(
+            self.base + "/api/scan-dirs",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST")
+        with urllib.request.urlopen(request) as response:
+            return json.loads(response.read().decode("utf-8"))
+
+    def test_returns_a_row_per_directory(self):
+        payload = self._post({"dirs": ["/no/such/a", "/no/such/b"]})
+        self.assertEqual(len(payload["dirs"]), 2)
+        self.assertFalse(payload["dirs"][0]["exists"])
+
+    def test_non_list_dirs_degrades_to_empty(self):
+        payload = self._post({"dirs": "not-a-list"})
+        self.assertEqual(payload["dirs"], [])
+
 
 class RunAuditBilledTests(unittest.TestCase):
     BILLING_UUID = "3b241101-e2bb-4255-8caf-4136c566a962"

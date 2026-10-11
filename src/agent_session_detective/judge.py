@@ -33,7 +33,7 @@ Skill trigger wording (what the agent sees when deciding):
 ---
 {trigger}
 ---
-
+{intent_block}
 Question: at any point in this session, should the agent have triggered (loaded) this skill? Reply with a JSON object and nothing else:
 {{"triggered": true/false, "turn": <1-based turn number or null>, "rationale": "<one or two sentences>", "evidence": "<verbatim quote from the session justifying the judgment>", "confidence": <0.0-1.0>}}
 Rules: "evidence" must be a verbatim quote copied from the turns above, not a paraphrase. If triggered is false, turn is null and evidence may be empty. Calibrate strictly: most skills should be false. Answer true only when the session clearly calls for this specific skill and a competent agent would be expected to load it, not merely because the topic is vaguely related. Generic principles or advice skills count as triggered only when the session is directly and explicitly about that principle."""
@@ -93,8 +93,18 @@ class Judge:
         return data["choices"][0]["message"]["content"]
 
     def judge_skill(self, skill: Skill, turns_block: str) -> Judgment:
+        # An injected intent is a person's statement about the skill, not
+        # something the log recorded. It is offered to help the judgment and
+        # is labelled as supplied so the model weights it as context rather
+        # than as observed agent behaviour.
+        intent_block = (
+            "Stated purpose of this skill (supplied by the auditor, not "
+            "observed in the log; use only to understand what it is for):\n%s\n"
+            % skill.intent if skill.intent else ""
+        )
         prompt = PROMPT_TEMPLATE.format(
-            turns=turns_block, name=skill.name, trigger=skill.trigger_excerpt[:1500]
+            turns=turns_block, name=skill.name, trigger=skill.trigger_excerpt[:1500],
+            intent_block=intent_block,
         )
         try:
             raw = self.ask(prompt)

@@ -19,6 +19,17 @@
   // ------------------------------------------------------------------
 
   var HELP = {
+    "inject":
+      "手工提供 skill 的真实原文，JSON 格式。用于两种情况：一是修正解析失真（多行 YAML " +
+      "标量、缺 description），二是纳入扫描目录里根本找不到的 harness 内置 skill。" +
+      "同名条目会覆盖 catalog 里的解析结果——提供原文的目的就是纠正它。" +
+      "intent 是你对「这个 skill 是干什么」的说法，会给 judge 做参考，但报告里会标成" +
+      "人工提供，不会冒充日志事实。",
+    "dirs":
+      "追加扫描的 skill 目录，每行一个。用于把运行时真实可用的 skill 纳入审计范围——" +
+      "默认只扫 ~/.agents/skills 和 ~/.kimi/skills，很多 harness 内置 skill 不在其中。" +
+      "每个目录下的 */SKILL.md 会被自动发现，catalog 里重名的以先到者为准。" +
+      "留空则只用默认目录。",
     "expect":
       "列出这个场景按路由规则应该被消费的 skill。loaded = 经 Skill 工具正式加载；" +
       "file-read = SKILL.md 被当文件读过（kimi-code 下属于绕过机制，codex 下是正规加载方式）；" +
@@ -116,9 +127,15 @@
       if (!t) { // clear
         auditForm.elements.expect.value = "";
         auditForm.elements.playbook.value = "";
+        auditForm.elements.dirs.value = "";
+        auditForm.elements.inject.value = "";
+        scanDirs();
+        checkInjected();
         return;
       }
       auditForm.elements.expect.value = t.expect;
+      auditForm.elements.dirs.value = t.dirs || "";
+      scanDirs();
       var select = auditForm.elements.playbook;
       for (var i = 0; i < select.options.length; i++) {
         if (select.options[i].value.indexOf(t.playbook) !== -1) {
@@ -128,6 +145,45 @@
       }
     });
   });
+
+  // skill dirs: report what each path contributes before the run is committed,
+  // so a typo is distinguishable from a directory that simply has no skills.
+  var dirTimer = null;
+  function scanDirs() {
+    var box = document.getElementById("dir-status");
+    if (!box) return;
+    var dirs = collectDirs();
+    if (!dirs.length) { box.textContent = ""; box.className = "dir-status dim"; return; }
+    box.textContent = "扫描中…";
+    box.className = "dir-status dim";
+    fetch("/api/scan-dirs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ dirs: dirs }),
+    }).then(function (r) { return r.json(); }).then(function (data) {
+      var entries = (data && data.dirs) || [];
+      var bad = entries.filter(function (e) { return !e.exists; });
+      var empty = entries.filter(function (e) { return e.exists && !e.skills; });
+      var parts = entries.map(function (e) {
+        return e.exists
+          ? e.path.replace(/^\/Users\/[^/]+/, "~") + " → " + e.skills + " 个 skill"
+          : e.path + "（不存在）";
+      });
+      if (bad.length) parts.push("⚠ " + bad.length + " 个目录不存在");
+      box.textContent = parts.join(" · ");
+      box.className = "dir-status" + (bad.length || empty.length ? " warn" : " ok");
+    }).catch(function () {
+      box.textContent = "";
+      box.className = "dir-status dim";
+    });
+  }
+
+  auditForm.elements.dirs.addEventListener("input", function () {
+    clearTimeout(dirTimer);
+    dirTimer = setTimeout(scanDirs, 400);
+  });
+
+  auditForm.elements.inject.addEventListener("input", checkInjected);
 
   function esc(s) {
     var d = document.createElement("div");
@@ -282,11 +338,59 @@
     loadSessions(searchInput.value);
   });
 
+  function collectDirs() {
+    return (auditForm.elements.dirs.value || "").split("\n").map(function (s) {
+      return s.trim();
+    }).filter(Boolean);
+  }
+
+  function collectInjected() {
+    return (auditForm.elements.inject.value || "").trim();
+  }
+
+  // Validate the pasted JSON before the run: a typo that only surfaces as a
+  // mysteriously smaller catalog after ten minutes is the failure mode worth
+  // designing against.
+  function checkInjected() {
+    var box = document.getElementById("inject-status");
+    if (!box) return true;
+    var text = collectInjected();
+    if (!text) { box.textContent = ""; box.className = "dir-status dim"; return true; }
+    var raw;
+    try {
+      raw = JSON.parse(text);
+    } catch (e) {
+      box.textContent = "JSON 解析失败：" + e.message;
+      box.className = "dir-status warn";
+      return false;
+    }
+    var entries = (raw && typeof raw === "object" && raw.skills &&
+                   typeof raw.skills === "object") ? raw.skills : raw;
+    var names = (entries && typeof entries === "object") ? Object.keys(entries) : [];
+    if (!names.length) {
+      box.textContent = "没解析出任何条目";
+      box.className = "dir-status warn";
+      return true;
+    }
+    var thin = names.filter(function (n) {
+      var e = entries[n];
+      return !e || typeof e !== "object" ||
+        (!(e.description || "").trim() && !(e.body_path || ""));
+    });
+    box.textContent = names.length + " 个条目" +
+      (thin.length ? " · ⚠ " + thin.length + " 个缺 description 且无 body_path（会被跳过）" : "");
+    box.className = "dir-status" + (thin.length ? " warn" : " ok");
+    return true;
+  }
+
   auditForm.addEventListener("submit", function (ev) {
     ev.preventDefault();
     if (!currentSession) return;
+    if (!checkInjected()) return;
     var params = {
       path: currentSession.path,
+      skills_dirs: collectDirs(),
+      injected: collectInjected(),
       expect: (auditForm.elements.expect.value || "").split(",").map(function (s) {
         return s.trim();
       }).filter(Boolean),
@@ -321,6 +425,8 @@
     if (!currentSession) return;
     var params = {
       path: currentSession.path,
+      skills_dirs: collectDirs(),
+      injected: collectInjected(),
       expect: (auditForm.elements.expect.value || "").split(",").map(function (s) {
         return s.trim();
       }).filter(Boolean),

@@ -45,6 +45,16 @@
         <button class="chip ghost" type="button" data-template="clear">清空</button>
       </div>
       <div class="form-row">
+        <label class="wide"><span class="label-row">skill 目录 <span class="help-wrap"><button class="help-dot" type="button" data-help="dirs">?</button><div class="help-pop"></div></span></span> <span class="dim">每行一个，可留空</span>
+          <textarea name="dirs" rows="2" placeholder="~/.agents/skills&#10;~/.workbuddy/plugins/cache"></textarea>
+          <span class="dir-status dim" id="dir-status"></span>
+        </label>
+        <label class="wide"><span class="label-row">skill 原文注入 <span class="help-wrap"><button class="help-dot" type="button" data-help="inject">?</button><div class="help-pop"></div></span></span> <span class="dim">JSON，可留空</span>
+          <textarea name="inject" rows="3" spellcheck="false" placeholder='{"cloud-service": {"description": "Sites need a backend? Load this first.", "intent": "接入托管后端"}}'></textarea>
+          <span class="dir-status dim" id="inject-status"></span>
+        </label>
+      </div>
+      <div class="form-row">
         <label><span class="label-row">expect skills <span class="help-wrap"><button class="help-dot" type="button" data-help="expect">?</button><div class="help-pop"></div></span></span> <span class="dim">comma separated</span>
           <input name="expect" placeholder="Poteto Mode, how, why">
         </label>

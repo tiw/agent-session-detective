@@ -133,12 +133,14 @@ PYTHONPATH=src python3 -m agent_session_detective --serve --port 9000
 ```
 
 - **会话列表**：扫描 `~/.kimi-code/sessions` 和 `~/.kimi/sessions` 两个根目录，显示**最近 10 个**会话（工作区 + 时间 + 是否已审计）。列表只做文件发现（stat 级，毫秒级），不解析日志——轮数/skill/token 统计都在你点审计那一刻才算
+- **skill 目录**：表单里可追加任意多个 skill 目录（每行一个），用于把运行时真实可用的 skill 纳入审计范围——默认只扫 `~/.agents/skills` 和 `~/.kimi/skills`，harness 内置的 plugin skill 大多不在其中。输入时会实时显示每个目录贡献了多少 skill、目录是否存在（同名的按版本去重）。用户提供的目录会**递归**查找（plugin cache 是 `<vendor>/<plugin>/<version>/SKILL.md` 的嵌套布局），默认目录仍走一层 glob
+- **skill 原文注入**：表单里直接粘 JSON，手工提供 skill 的真实原文。同名条目**覆盖** catalog 里的解析结果（提供原文的目的就是纠正它），catalog 里没有的直接新增——这是把 harness 内置 skill 纳入审计的手段。`intent` 字段是你对「这个 skill 干什么」的说法，会给 judge 做参考，但报告里始终标注为人工提供，不会冒充日志事实。粘贴时即时校验：JSON 语法错误会当场提示，条目缺 `description` 且无 `body_path` 会被标出来（那类条目会被跳过）。命令行等价物是 `--injected PATH`
 - **fleet 汇总**：侧栏 `fleet` 按钮按需触发，跨会话聚合（会话数、平均轮数、平均缓存命中率、增长形状分布、重复注入总量）——「纠规则不纠个案」的入口；要解析全部日志，约 10 秒，期间页面可继续操作
 - **审计表单**：填 `--expect` 清单、选 playbook 做 IF 评估、勾选是否跑 missed-trigger 判定（LLM 部分后台线程执行，页面轮询进度）
 - **报告渲染**：expectations 核对表、findings、IF 逐步判定、skill 生命周期、事件流，与 CLI 版同一套数据形状
 - **事件流角色 badge**：每条事件标注 `user` / `think` / `say` / `tool` / `result` / `compact`，人的输入、模型思考、模型回复、工具 traffic 一眼分开
 
-JSON API 也可以独立使用（`GET /api/sessions`（最近 10 个，纯发现）、`GET /api/fleet`（按需全量聚合，慢）、`POST /api/audit`、`GET /api/job/<id>`、`GET /api/playbooks`），方便接进自己的工具链。
+JSON API 也可以独立使用（`GET /api/sessions`（最近 10 个，纯发现）、`GET /api/fleet`（按需全量聚合，慢）、`POST /api/scan-dirs`（预览每个目录贡献多少 skill）、`POST /api/audit`、`GET /api/job/<id>`、`GET /api/playbooks`），方便接进自己的工具链。
 
 > ⚠️ 服务无鉴权，只绑定 `127.0.0.1`，不要暴露到公网。
 
@@ -164,11 +166,12 @@ JSON API 也可以独立使用（`GET /api/sessions`（最近 10 个，纯发现
 |---|---|
 | `session` | Kimi 会话目录（含 `wire.jsonl`）或 Qoder transcript（`~/.qoder/projects/<workspace>/<session>.jsonl`）。省略则自动找最近一个 |
 | `--sessions-root` | 自动定位最近 Kimi 会话时的根目录，默认 `~/.kimi/sessions` |
-| `--skills-dir` | 追加 skill 目录到 catalog，可重复 |
+| `--skills-dir` | 追加 skill 目录到 catalog，可重复。用户提供的目录递归查找（plugin cache 是嵌套布局），默认目录走一层 glob |
 | `--out` | 报告输出路径，默认 Kimi 的 `<会话目录>/skill-audit.html` 或 Qoder 的 `<session>.skill-audit.html` |
 | `--open` | 生成后直接用浏览器打开 |
 | `--no-judge` | 只出事实，跳过 LLM 判断 |
 | `--expect` | 逗号分隔的预期 skill 名，渲染成命中/缺失清单 |
+| `--injected` | 手工提供 skill 原文的 JSON 文件。同名覆盖 catalog 解析结果，缺失的补进 catalog |
 | `--judge-limit` | 只判断前 N 个未消费的 skill |
 | `--steps` | 待评估的 playbook 文件，可重复（需要 judge） |
 | `--gate` | CI 门槛；配合 `--steps` / `--expect` 决定退出码 |
@@ -247,7 +250,7 @@ skill 展示的是**加载时捕获的内容快照**——所以即使 skill 文
     └── webapp/       # 单页 UI（index.html / style.css / app.js）
 ```
 
-skill catalog 从 `~/.agents/skills` 和 `~/.kimi/skills` 扫描，可用 `--skills-dir` 追加。
+skill catalog 从 `~/.agents/skills` 和 `~/.kimi/skills` 扫描，可用 `--skills-dir` 追加（web 表单的「skill 目录」栏是同一个入口）。目录解析按 skill 名去重，所以版本化的 plugin cache 里同一个 skill 有多个版本时只保留一个。
 
 ---
 

@@ -17,7 +17,14 @@ from typing import Dict, List, Optional
 from urllib.parse import urlparse, parse_qs
 
 from .bill import build_bill
-from .catalog import load_catalog
+from .catalog import (
+    load_catalog,
+    load_injected,
+    load_skill_dir,
+    merge_catalog,
+    parse_failures,
+    parse_injected,
+)
 from .if_eval import IFResult, evaluate_playbook
 from .ir.schema import IR_VERSION
 from .judge import Judge, Judgment, judge_session
@@ -51,6 +58,13 @@ def cache_key(params: dict) -> str:
             "steps": sorted(params.get("steps") or []),
             "judge_triggers": bool(params.get("judge_triggers")),
             "billed": bool(params.get("billed")),
+            # The catalog is part of the result, so two runs that differ only
+            # in which directories were scanned must not share a cache entry.
+            "skills_dirs": sorted(
+                str(Path(d).expanduser()) for d in params.get("skills_dirs") or []),
+            # Injected text becomes catalog content, so two runs differing
+            # only in what the auditor supplied must not share a cache entry.
+            "injected": _injected_fingerprint(params),
         },
         sort_keys=True,
     )
@@ -633,6 +647,72 @@ def render_tree_page(session_path: str, billed: bool = False, ide_db: bool = Fal
     return render_skill_tree(document, ide_db_hint=hint)
 
 
+def scan_skill_dirs(dirs: List[str]) -> dict:
+    """Report what each candidate directory contributes to the catalog.
+
+    Lets the audit form show what a directory holds before it is committed to
+    a run — a typo'd path is otherwise indistinguishable from a directory that
+    simply has no skills in it.
+    """
+    entries = []
+    total = 0
+    for raw in dirs:
+        if not isinstance(raw, str) or not raw.strip():
+            continue
+        path = Path(raw.strip()).expanduser()
+        item = {"path": str(path), "exists": path.is_dir(), "skills": 0, "parse_failures": 0}
+        if path.is_dir():
+            # Preview exactly what the run will load: supplied directories get
+            # the deep walk, so a nested plugin cache reports its real count
+            # here rather than an alarming zero.
+            skills = load_skill_dir(path, recursive=True)
+            item["skills"] = len(skills)
+            item["parse_failures"] = len(parse_failures(skills))
+            item["names"] = [s.name for s in skills[:20]]
+            total += item["skills"]
+        entries.append(item)
+    return {"dirs": entries, "skills": total}
+
+
+def _injected_fingerprint(params: dict) -> str:
+    """Identity of the supplied skill text, for cache separation.
+
+    Built from the resolved entries rather than the raw string so cosmetic
+    reformatting of the same JSON does not orphan a cached result, while a
+    genuinely different payload does.
+    """
+    skills = _injected_for(params)
+    if not skills:
+        return ""
+    payload = sorted(
+        (s.name, s.description, s.intent or "", str(s.path)) for s in skills)
+    return hashlib.sha1(
+        json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    ).hexdigest()[:16]
+
+
+def _injected_for(params: dict) -> List:
+    """Supplied skill text, from either an inline object or a file path.
+
+    The web form pastes JSON inline (no file to write first); the API also
+    accepts ``injected_path`` so a caller with a truth file on disk can point
+    at it. A malformed inline payload is dropped rather than failing the run
+    — the audit still proceeds on the scanned catalog.
+    """
+    raw = params.get("injected")
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except ValueError:
+            return []
+    if raw:
+        return parse_injected(raw)
+    path = params.get("injected_path")
+    if isinstance(path, str) and path.strip():
+        return load_injected(Path(path.strip()))
+    return []
+
+
 def run_audit(job: Job) -> None:
     job.status = "running"
     job.started_at = time.time()
@@ -645,7 +725,12 @@ def run_audit(job: Job) -> None:
         job.mark("building fact timeline (%d events)" % len(session.events))
         timeline = build_timeline(session)
         job.mark("loading skill catalog")
-        catalog = load_catalog()
+        skill_dirs = [Path(d).expanduser() for d in job.params.get("skills_dirs") or []]
+        catalog = load_catalog(extra_dirs=skill_dirs)
+        injected = _injected_for(job.params)
+        if injected:
+            catalog = merge_catalog(catalog, injected)
+            job.mark("merged %d injected skills" % len(injected))
         judge = Judge.from_env()
         judgments: List[Judgment] = []
         judge_enabled = judge is not None
@@ -742,6 +827,8 @@ def run_audit(job: Job) -> None:
             ),
             "judge_enabled": judge_enabled,
             "catalog_size": len(catalog),
+            "catalog_dirs": [str(d) for d in skill_dirs],
+            "injected_count": len(injected),
             "status_line": status_line,
             "suggestions": suggest_next_steps(
                 timeline, expectations, judgments, if_results, judge_enabled, token_stats
@@ -863,6 +950,16 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         parsed = urlparse(self.path)
+        if parsed.path == "/api/scan-dirs":
+            length = int(self.headers.get("Content-Length", 0))
+            try:
+                payload = json.loads(self.rfile.read(length) or b"{}")
+            except json.JSONDecodeError:
+                self._send_json(400, {"error": "bad json"})
+                return
+            dirs = payload.get("dirs") or []
+            self._send_json(200, scan_skill_dirs(dirs if isinstance(dirs, list) else []))
+            return
         if parsed.path != "/api/audit":
             self._send_json(404, {"error": "not found"})
             return

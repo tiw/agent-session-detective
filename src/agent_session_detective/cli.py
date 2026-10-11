@@ -16,7 +16,7 @@ from .billing import (
     query_billed_series,
     session_uuid_from_source,
 )
-from .catalog import load_catalog
+from .catalog import load_catalog, load_injected, merge_catalog
 from .ide_db import attach_ide_db, suggest_ide_db_hint
 from .if_eval import IFResult, evaluate_playbook
 from .ir import build_analyses, build_audit_document
@@ -55,8 +55,14 @@ def main(argv=None) -> int:
         default=DEFAULT_SESSIONS_ROOT,
         help="Kimi sessions root used to locate the most recent session (default: %(default)s).",
     )
-    parser.add_argument("--skills-dir", action="append", default=None,
-                        help="Extra skill directory to include in the catalog (repeatable).")
+    parser.add_argument(
+        "--skills-dir", action="append", default=None,
+        help="Extra skill directory to include in the catalog (repeatable).")
+    parser.add_argument(
+        "--injected", default=None, metavar="PATH",
+        help="JSON file of externally supplied skill text (description / intent / "
+             "body_path). Injected entries override same-named catalog skills and "
+             "add ones the scanned directories never see.")
     parser.add_argument("--out", default=None,
                         help="Report output path (default: <session>/skill-audit.html "
                              "or <transcript>.skill-audit.html).")
@@ -158,6 +164,14 @@ def main(argv=None) -> int:
 
     timeline = build_timeline(session)
     catalog = load_catalog(extra_dirs=args.skills_dir)
+    injected = load_injected(Path(args.injected)) if args.injected else []
+    if args.injected and not injected:
+        print("No usable entries in %s; auditing with the scanned catalog only."
+              % args.injected, file=sys.stderr)
+    if injected:
+        catalog = merge_catalog(catalog, injected)
+        print("Catalog: %d skills (%d injected from %s)."
+              % (len(catalog), len(injected), args.injected), file=sys.stderr)
 
     judge = None if args.no_judge else Judge.from_env()
     judgments = []
