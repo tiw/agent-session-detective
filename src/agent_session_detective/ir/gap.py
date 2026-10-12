@@ -179,6 +179,43 @@ def skill_gaps(skills: Sequence[SkillEntity], catalog: Sequence[Skill],
     }
 
 
-def gap_candidates(*args, **kwargs):
-    """Placeholder — implemented in the next task."""
-    raise NotImplementedError
+def _session_text(items: Sequence[ContentItem]) -> str:
+    return "\n".join(
+        item.human_text for item in items if item.human_text).casefold()
+
+
+def gap_candidates(skills: Sequence[SkillEntity],
+                   items: Sequence[ContentItem],
+                   catalog: Sequence[Skill],
+                   ) -> Tuple[List[Tuple[str, Skill]], dict]:
+    """Listed-but-never-loaded skills whose name the session mentioned.
+
+    The prefilter is deliberately cheap and legible: a candidate must have
+    been offered to the agent (a listing), must never have loaded (no
+    body/stub/execution), and its name or an alias must appear in the
+    session's typed human input. Skills that fail the name test are
+    counted in ``prefiltered`` — never silently dropped.
+    """
+    counts = _counts(skills)
+    matched, _, _ = _join(counts, catalog)
+    text = _session_text(items)
+    pairs: List[Tuple[str, Skill]] = []
+    prefiltered = 0
+    listed_unloaded = 0
+    for skill_id in sorted(counts):
+        entry = counts[skill_id]
+        if not entry["listed"] or entry["loaded"] or entry["executed"]:
+            continue
+        listed_unloaded += 1
+        catalog_skill = matched.get(skill_id)
+        if catalog_skill is None:
+            prefiltered += 1
+            continue
+        keys = [skill_id.lower()] + [a.lower() for a in entry["aliases"]]
+        if not any(k in text for k in keys):
+            prefiltered += 1
+            continue
+        pairs.append((skill_id, catalog_skill))
+    stats = {"listed_unloaded": listed_unloaded, "candidates": len(pairs),
+             "prefiltered": prefiltered}
+    return pairs, stats

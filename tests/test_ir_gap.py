@@ -146,3 +146,87 @@ class JoinAndSetsTest(unittest.TestCase):
         # row counts once, in judge_errors, never in over_limit
         self.assertEqual(gap["unjudged"]["over_limit"], 0)
         self.assertEqual(gap["unjudged"]["count"], 1)
+
+
+def make_item(seq, text=None):
+    return ContentItem(
+        item_id="main:%d" % seq, agent_id="main", bucket="user",
+        kind="human_input", name=None, channel="qoder:user_input",
+        wire_seq=seq, gone_seq=None,
+        size_chars=len(text or ""), tokens_est=max(1, len(text or "") // 4),
+        sha1="isha-%d" % seq, norm_sha1="inorm-%d" % seq,
+        record={"file": "transcript.jsonl", "seq": seq},
+        preview=(text or "")[:80], human_text=text)
+
+
+class GapCandidatesTest(unittest.TestCase):
+    def test_prefilter_keeps_only_mentioned_unloaded(self):
+        skills = [
+            entity("alpha", ("listing",)),   # unloaded, never mentioned
+            entity("beta", ("listing",)),    # unloaded, mentioned below
+            entity("gamma", ("listing", "body")),  # loaded — never a candidate
+        ]
+        items = [make_item(1, "please use beta for this")]
+        catalog = [make_skill("alpha"), make_skill("beta"), make_skill("gamma")]
+
+        pairs, stats = gap_candidates(skills, items, catalog)
+
+        self.assertEqual([skill.name for _, skill in pairs], ["beta"])
+        self.assertEqual(
+            stats, {"listed_unloaded": 2, "candidates": 1, "prefiltered": 1})
+
+    def test_alias_mention_qualifies(self):
+        skills = [entity("demo", ("listing",), aliases=("pkg:demo",))]
+        items = [make_item(1, "run pkg:demo please")]
+        catalog = [make_skill("pkg:demo")]
+
+        pairs, stats = gap_candidates(skills, items, catalog)
+
+        self.assertEqual([skill.name for _, skill in pairs], ["pkg:demo"])
+        self.assertEqual(stats["candidates"], 1)
+
+    def test_mention_is_casefolded(self):
+        skills = [entity("beta", ("listing",))]
+        items = [make_item(1, "BETA would help here")]
+        catalog = [make_skill("beta")]
+
+        pairs, _ = gap_candidates(skills, items, catalog)
+        self.assertEqual(len(pairs), 1)
+
+    def test_unmatched_candidate_is_counted_not_judged(self):
+        skills = [entity("ghost", ("listing",))]
+        items = [make_item(1, "ghost ghost ghost")]
+        catalog = []
+
+        pairs, stats = gap_candidates(skills, items, catalog)
+
+        self.assertEqual(pairs, [])
+        self.assertEqual(
+            stats, {"listed_unloaded": 1, "candidates": 0, "prefiltered": 1})
+
+    def test_no_listing_means_no_candidate_even_if_mentioned(self):
+        skills = [entity("alpha", ("body",))]
+        items = [make_item(1, "alpha alpha")]
+        catalog = [make_skill("alpha")]
+
+        pairs, stats = gap_candidates(skills, items, catalog)
+
+        self.assertEqual(pairs, [])
+        self.assertEqual(stats["listed_unloaded"], 0)
+
+    def test_prefiltered_skill_reaches_skill_gaps_unjudged(self):
+        skills = [entity("alpha", ("listing",)), entity("beta", ("listing",))]
+        items = [make_item(1, "only beta matters")]
+        catalog = [make_skill("alpha"), make_skill("beta")]
+        pairs, stats = gap_candidates(skills, items, catalog)
+
+        # beta was judged (not triggered), alpha was prefiltered away:
+        # unjudged = prefiltered(1) + over_limit(0); a False judgment is a
+        # verdict, so it does not count as unjudged and not as missed.
+        gap = skill_gaps(skills, catalog, [make_judgment("beta")],
+                         stats=stats, judge_configured=True)
+
+        self.assertEqual(gap["unjudged"]["prefiltered"], 1)
+        self.assertEqual(gap["unjudged"]["count"], 1)
+        self.assertEqual(gap["missed_triggers"], [])
+        self.assertTrue(any("prefiltered" in n for n in gap["notes"]))
