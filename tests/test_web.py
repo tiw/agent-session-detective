@@ -1294,5 +1294,38 @@ class UploadDiscoveryTests(unittest.TestCase):
             self.assertEqual(uploaded["workspace"], "upload")
 
 
+class RunAuditSkillGapTests(unittest.TestCase):
+    def _transcript(self, directory):
+        transcript = Path(directory) / "s.jsonl"
+        transcript.write_text(
+            '{"type": "context.append_loop_event", "event": '
+            '{"type": "tool.call", "toolCallId": "c1", "name": "Read", '
+            '"args": {"path": "a"}}}\n'
+            '{"type": "context.append_loop_event", "event": '
+            '{"type": "tool.result", "toolCallId": "c1", "result": '
+            '{"output": "hello world"}}}\n',
+            encoding="utf-8")
+        return transcript
+
+    def test_result_carries_skill_gap_block(self):
+        with tempfile.TemporaryDirectory() as directory:
+            transcript = self._transcript(directory)
+            original_cache_dir = web.CACHE_DIR
+            web.CACHE_DIR = Path(tempfile.mkdtemp())
+            try:
+                job = web.Job({"path": str(transcript)})
+                web.run_audit(job)
+            finally:
+                web.CACHE_DIR = original_cache_dir
+
+            self.assertEqual(job.status, "done")
+            gap = job.result["skill_gaps"]
+            self.assertEqual(
+                sorted(gap),
+                ["join", "listed_unloaded", "loaded_unused", "missed_triggers",
+                 "notes", "sets", "unjudged"])
+            self.assertIsInstance(gap["join"]["matched"], int)
+
+
 if __name__ == "__main__":
     unittest.main()
