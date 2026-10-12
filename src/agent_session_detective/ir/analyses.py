@@ -35,6 +35,7 @@ from .schema import AuditDocument, ContentItem
 from .records import is_subagent_agent
 from .library import co_load_graph
 from .skill_tree import skill_tree
+from .process import process_signature
 
 RE_INJECTION_BUCKETS = ("inject", "skill")
 
@@ -392,6 +393,7 @@ def build_analyses(document: AuditDocument) -> dict:
         "skill_loads": skill_loads(document),
         "dispatches": dispatches(document),
         "skill_tree": skill_tree(document),
+        "process": process_signature(document),
         "library": {
             "edges": [e.to_dict() for e in co_load_graph(document)],
         },

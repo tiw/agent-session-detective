@@ -249,7 +249,8 @@ class CrossFixtureTest(unittest.TestCase):
                 self.assertEqual(
                     sorted(analyses),
                     ["context_organization", "dispatches", "library",
-                     "redundancy", "skill_audit", "skill_loads", "skill_tree"],
+                     "process", "redundancy", "skill_audit", "skill_loads",
+                     "skill_tree"],
                 )
                 items_by_id = {item.item_id: item for item in document.items}
                 rows = analyses["context_organization"]["rows"]
@@ -530,6 +531,17 @@ class SubagentReturnsTest(IREventsTestCase, unittest.TestCase):
         self.assertEqual(ledger["totals"], {
             "dispatches": 0, "linked": 0, "return_tokens_total": 0,
             "flagged": 0, "process_unavailable": 0})
+
+
+class ProcessKeyTest(unittest.TestCase):
+    def test_build_analyses_gains_the_process_key(self):
+        analyses = build_analyses(build("reinject.jsonl"))
+        sig = analyses["process"]
+        self.assertIn(sig["style"], ("pipeline", "direct", "mixed"))
+        self.assertEqual(
+            sorted(sig),
+            ["inject", "interventions", "listing", "notes",
+             "skill_loads", "style", "workflow"])
 
 
 if __name__ == "__main__":
