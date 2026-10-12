@@ -1,9 +1,11 @@
+import io
 import json
 import os
 import shutil
 import sqlite3
 import tempfile
 import unittest
+from contextlib import redirect_stderr
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
@@ -191,8 +193,8 @@ class IrCliTests(unittest.TestCase):
             analyses = json.loads(analyses_path.read_text(encoding="utf-8"))
             self.assertEqual(
                 sorted(analyses),
-                ["context_organization", "dispatches", "redundancy",
-                 "skill_audit", "skill_loads", "skill_tree"],
+                ["context_organization", "dispatches", "library",
+                 "redundancy", "skill_audit", "skill_loads", "skill_tree"],
             )
             self.assertEqual(
                 [row["call_id"] for row in analyses["context_organization"]["rows"]],
@@ -211,13 +213,68 @@ class IrCliTests(unittest.TestCase):
             analyses = json.loads(analyses_path.read_text(encoding="utf-8"))
             self.assertEqual(
                 sorted(analyses),
-                ["context_organization", "dispatches", "redundancy",
-                 "skill_audit", "skill_loads", "skill_tree"],
+                ["context_organization", "dispatches", "library",
+                 "redundancy", "skill_audit", "skill_loads", "skill_tree"],
             )
             self.assertEqual(
                 [row["call_id"] for row in analyses["context_organization"]["rows"]],
                 ["main:0", "main:1", "main:2"],
             )
+
+
+class IrCliLibraryDiffTests(unittest.TestCase):
+    """--ir-analyses carries the declared↔observed diff.
+
+    The catalog loads after the document is built, so the library block
+    can only exist if the CLI assembles it after ``load_catalog`` — this
+    pins the diff to the actually loaded catalog, not a document-only view.
+    """
+
+    def _write_skill(self, skills_dir, name, requires=()):
+        skill_dir = skills_dir / name
+        skill_dir.mkdir(parents=True, exist_ok=True)
+        frontmatter = ["---", "name: %s" % name,
+                       "description: %s skill." % name]
+        if requires:
+            frontmatter.append("requires:")
+            frontmatter.extend("  - %s" % target for target in requires)
+        frontmatter.append("---")
+        (skill_dir / "SKILL.md").write_text(
+            "\n".join(frontmatter) + "\n# %s\n" % name, encoding="utf-8")
+
+    def test_ir_analyses_library_diff_reads_the_loaded_catalog(self):
+        with tempfile.TemporaryDirectory() as directory:
+            transcript = Path(directory) / "tier1.jsonl"
+            shutil.copy(FIXTURES / "ir" / "tier1.jsonl", transcript)
+            skills = Path(directory) / "skills"
+            self._write_skill(skills, "alpha", requires=["beta"])
+            self._write_skill(skills, "beta")
+            analyses_path = Path(directory) / "audit.analyses.json"
+            stderr = io.StringIO()
+
+            with patch("agent_session_detective.cli.render_report",
+                       return_value="<html>report</html>"), \
+                 patch("agent_session_detective.catalog.DEFAULT_SKILL_DIRS",
+                       ()), \
+                 redirect_stderr(stderr):
+                exit_code = cli.main([
+                    str(transcript), "--no-judge",
+                    "--skills-dir", str(skills),
+                    "--ir-analyses", str(analyses_path),
+                ])
+
+            self.assertEqual(exit_code, 0)
+            analyses = json.loads(analyses_path.read_text(encoding="utf-8"))
+            library = analyses["library"]
+            self.assertEqual(set(library), {"edges", "join", "diff"})
+            diff = library["diff"]
+            self.assertEqual(diff["totals"]["declared"], 1)
+            self.assertEqual(diff["over_declared"],
+                             [{"a": "alpha", "b": "beta"}])
+            self.assertEqual(diff["implicit"], [])
+            self.assertEqual(library["join"]["ambiguous"], [])
+            self.assertIn("library: 1 declared / 0 observed",
+                          stderr.getvalue())
 
 
 BILLING_UUID = "3b241101-e2bb-4255-8caf-4136c566a962"

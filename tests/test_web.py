@@ -1076,6 +1076,133 @@ class CatalogAuditEndpointTests(unittest.TestCase):
             web.run_catalog_audit(["not", "a", "dict"])
 
 
+class CatalogAuditPanelRenderTests(unittest.TestCase):
+    """The panel renders the duplication and closure blocks.
+
+    app.js is a plain browser script with no module system, so the
+    regression net pins the payload wiring itself — the same source-level
+    approach the lifecycle and tree contracts use in test_wire. Every
+    asserted string is a payload read the section cannot render without.
+    """
+
+    def _app_js(self) -> str:
+        return (
+            Path(web.__file__).parent / "webapp" / "app.js"
+        ).read_text(encoding="utf-8")
+
+    def test_duplication_section_reads_its_payload_block(self):
+        app_js = self._app_js()
+        self.assertIn("重复度", app_js)
+        self.assertIn("d.duplicates", app_js)
+        self.assertIn("d.dup_rate", app_js)
+        self.assertIn("waste_tokens_est", app_js)
+
+    def test_duplication_section_discloses_the_convention_thresholds(self):
+        app_js = self._app_js()
+        self.assertIn("d.thresholds.dup_containment", app_js)
+        self.assertIn("d.thresholds.desc_dup_containment", app_js)
+
+    def test_closure_section_reads_its_payload_block(self):
+        app_js = self._app_js()
+        self.assertIn("加载闭包", app_js)
+        self.assertIn("d.closures", app_js)
+        self.assertIn("d.thresholds.closure_warn_tokens", app_js)
+        self.assertIn("d.thresholds.closure_depth", app_js)
+
+    def test_closure_section_keeps_unresolved_and_truncation_visible(self):
+        app_js = self._app_js()
+        self.assertIn("未解析", app_js)
+        self.assertIn("深度截断", app_js)
+
+
+class AuditLibraryBlockTests(unittest.TestCase):
+    """The audit result carries the declared-vs-observed library block.
+
+    The diff can only be as real as the catalog the run loaded, so the
+    payload must include the identity join and the three-bucket diff —
+    raw edges alone leave the feedback loop blind.
+    """
+
+    def _transcript(self, directory):
+        transcript = Path(directory) / "s.jsonl"
+        transcript.write_text(
+            '{"type": "context.append_loop_event", "event": '
+            '{"type": "tool.call", "toolCallId": "c1", "name": "Read", '
+            '"args": {"path": "a"}}}\n'
+            '{"type": "context.append_loop_event", "event": '
+            '{"type": "tool.result", "toolCallId": "c1", "result": '
+            '{"output": "hello world"}}}\n',
+            encoding="utf-8")
+        return transcript
+
+    def test_audit_payload_carries_the_library_diff(self):
+        with tempfile.TemporaryDirectory() as directory:
+            transcript = self._transcript(directory)
+            skills = Path(directory) / "skills"
+            (skills / "alpha").mkdir(parents=True)
+            (skills / "alpha" / "SKILL.md").write_text(
+                "---\nname: alpha\ndescription: Alpha skill.\n"
+                "requires:\n  - beta\n---\n# Alpha\n", encoding="utf-8")
+            (skills / "beta").mkdir()
+            (skills / "beta" / "SKILL.md").write_text(
+                "---\nname: beta\ndescription: Beta skill.\n---\n# Beta\n",
+                encoding="utf-8")
+            original_cache_dir = web.CACHE_DIR
+            web.CACHE_DIR = Path(tempfile.mkdtemp())
+            try:
+                with patch("agent_session_detective.catalog.DEFAULT_SKILL_DIRS",
+                           ()):
+                    job = web.Job({
+                        "path": str(transcript),
+                        "skills_dirs": [str(skills)],
+                    })
+                    web.run_audit(job)
+            finally:
+                web.CACHE_DIR = original_cache_dir
+
+            self.assertEqual(job.status, "done")
+            library = job.result["library"]
+            self.assertEqual(set(library), {"edges", "join", "diff"})
+            self.assertEqual(library["diff"]["over_declared"],
+                             [{"a": "alpha", "b": "beta"}])
+            self.assertEqual(library["join"]["ambiguous"], [])
+
+
+class AuditLibraryRenderTests(unittest.TestCase):
+    """The session audit renders the declared-vs-observed section.
+
+    Source-level pinning, same rationale as the catalog panel contract:
+    every asserted string is a payload read the section cannot render
+    without.
+    """
+
+    def _app_js(self) -> str:
+        return (
+            Path(web.__file__).parent / "webapp" / "app.js"
+        ).read_text(encoding="utf-8")
+
+    def test_library_section_reads_its_payload_block(self):
+        app_js = self._app_js()
+        self.assertIn("声明 vs 观测", app_js)
+        self.assertIn("r.library", app_js)
+        self.assertIn("lib.diff", app_js)
+        self.assertIn("over_declared", app_js)
+        self.assertIn("implicit", app_js)
+        self.assertIn("consistent", app_js)
+        self.assertIn("implicit_min_weight", app_js)
+
+    def test_library_section_keeps_the_join_footnote(self):
+        app_js = self._app_js()
+        self.assertIn("lib.join", app_js)
+        self.assertIn("ambiguous", app_js)
+        self.assertIn("renamed", app_js)
+
+    def test_library_section_has_a_help_entry(self):
+        app_js = self._app_js()
+        self.assertIn('"library":', app_js)
+        self.assertIn('helpDot("library")', app_js)
+
+
 class InjectedDisclosurePayloadTests(unittest.TestCase):
     """The result payload has to name the supplied skills.
 

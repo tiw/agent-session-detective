@@ -972,9 +972,14 @@ def run_audit(job: Job) -> None:
         from .ir.analyses import skill_loads as skill_loads_rollup
         from .ir.analyses import subagent_returns as subagent_returns_rollup
         from .ir.builder import build_audit_document
+        from .ir.library import library_report
 
         adapter_id = _ir_adapter_id(session, source_path)
         document = build_audit_document(session, adapter_id)
+        # The declared-vs-observed diff needs the loaded catalog, so it is
+        # assembled here — build_analyses stays document-pure.
+        declared = {skill.name: skill.requires for skill in catalog}
+        library_block = library_report(document, declared)
         expected = job.params.get("expect") or []
         consumed = {n.lower() for n in timeline.consumed_skill_names()}
         expectations = [
@@ -1026,6 +1031,7 @@ def run_audit(job: Job) -> None:
             "skill_loads": load_block,
             "bill": bill,
             "subagent_returns": returns_block,
+            "library": library_block,
             "no_self_invoke": sorted(
                 s.name for s in catalog if s.disable_model_invocation
             ),

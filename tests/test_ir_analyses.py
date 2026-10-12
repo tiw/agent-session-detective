@@ -248,8 +248,8 @@ class CrossFixtureTest(unittest.TestCase):
                 analyses = build_analyses(document)
                 self.assertEqual(
                     sorted(analyses),
-                    ["context_organization", "dispatches", "redundancy",
-                     "skill_audit", "skill_loads", "skill_tree"],
+                    ["context_organization", "dispatches", "library",
+                     "redundancy", "skill_audit", "skill_loads", "skill_tree"],
                 )
                 items_by_id = {item.item_id: item for item in document.items}
                 rows = analyses["context_organization"]["rows"]

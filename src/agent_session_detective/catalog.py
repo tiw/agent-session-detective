@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -64,6 +64,9 @@ class Skill:
     intent: Optional[str] = None
     # True when the description could not be parsed out of the frontmatter.
     description_parse_failed: bool = False
+    # Other skills this one pulls in, by name (frontmatter ``requires:``).
+    # The static closure walks these edges; it never assumes they loaded.
+    requires: List[str] = field(default_factory=list)
 
     @property
     def is_injected(self) -> bool:
@@ -303,6 +306,25 @@ def _as_text(value: Any) -> str:
     return str(value)
 
 
+def _as_list(value: Any) -> List[str]:
+    """A name list from frontmatter: YAML sequence, "[a, b]", or "a, b"."""
+    if isinstance(value, list):
+        items = [str(item) for item in value]
+    elif value is None or isinstance(value, dict):
+        return []
+    else:
+        text = str(value).strip()
+        if text.startswith("[") and text.endswith("]"):
+            text = text[1:-1]
+        items = text.split(",")
+    out: List[str] = []
+    for item in items:
+        name = item.strip().strip("\"'")
+        if name and name not in out:
+            out.append(name)
+    return out
+
+
 def load_skill_file(path: Path) -> Optional[Skill]:
     try:
         text = path.read_text(encoding="utf-8", errors="replace")
@@ -322,6 +344,7 @@ def load_skill_file(path: Path) -> Optional[Skill]:
         path=path,
         disable_model_invocation=no_self,
         description_parse_failed=len(description) < MIN_MEANINGFUL_DESCRIPTION,
+        requires=_as_list(meta.get("requires")),
     )
 
 

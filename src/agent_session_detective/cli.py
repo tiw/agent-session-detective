@@ -20,6 +20,7 @@ from .catalog import load_catalog, load_injected, merge_catalog
 from .ide_db import attach_ide_db, suggest_ide_db_hint
 from .if_eval import IFResult, evaluate_playbook
 from .ir import build_analyses, build_audit_document
+from .ir.library import library_report
 from .judge import Judge, judge_session
 from .report import render_report
 from .timeline import build_timeline
@@ -151,15 +152,14 @@ def main(argv=None) -> int:
         attach_ide_db(session, session_source, args.ide_db_path)
 
     # The document is always built: the report renders the evidence-backed
-    # load section from it. --ir-out/--ir-analyses keep serializing it
-    # unchanged.
+    # load section from it. --ir-out serializes it unchanged; --ir-analyses
+    # is written after the catalog loads, so its library block can carry
+    # the declared-vs-observed diff.
     document = build_audit_document(session, _detect_adapter(session, session_source))
     if args.billed_usage:
         attach_billed_usage(document, session_source, args.billed_db)
     if args.ir_out:
         _write_json(Path(args.ir_out), document.to_dict())
-    if args.ir_analyses:
-        _write_json(Path(args.ir_analyses), build_analyses(document))
     if args.tree_out:
         tree_path = Path(args.tree_out)
         hint = None
@@ -180,6 +180,30 @@ def main(argv=None) -> int:
         catalog = merge_catalog(catalog, injected)
         print("Catalog: %d skills (%d injected from %s)."
               % (len(catalog), len(injected), args.injected), file=sys.stderr)
+
+    # The library block joins the two name spaces (catalog names vs
+    # observed ids) before diffing declared requires against co-loads —
+    # it needs the loaded catalog, so assembly happens here while
+    # build_analyses stays document-pure.
+    declared = {skill.name: skill.requires for skill in catalog}
+    library = library_report(document, declared)
+    diff_totals = library["diff"]["totals"]
+    if diff_totals["declared"] or library["edges"]:
+        summary = ("library: %d declared / %d observed pair(s): "
+                   "%d consistent, %d over-declared, %d implicit (w>=%d)"
+                   % (diff_totals["declared"], diff_totals["observed"],
+                      len(library["diff"]["consistent"]),
+                      len(library["diff"]["over_declared"]),
+                      len(library["diff"]["implicit"]),
+                      diff_totals["implicit_min_weight"]))
+        if library["join"]["ambiguous"]:
+            summary += ("; %d observed id(s) stayed unjoined (ambiguous)"
+                        % len(library["join"]["ambiguous"]))
+        print(summary, file=sys.stderr)
+    if args.ir_analyses:
+        analyses = build_analyses(document)
+        analyses["library"] = library
+        _write_json(Path(args.ir_analyses), analyses)
 
     judge = None if args.no_judge else Judge.from_env()
     judgments = []
@@ -287,7 +311,8 @@ def _run_catalog_audit(argv: List[str]) -> int:
     parser = argparse.ArgumentParser(
         prog="asd catalog-audit",
         description="Static health check of the skill catalog: size tiers, "
-                    "description quality, layering ratio, parse health. "
+                    "description quality, layering ratio, parse health, "
+                    "near-duplicates, loading closure. "
                     "Runs offline — no session log, no LLM.",
     )
     parser.add_argument("--skills-dir", action="append", default=None,

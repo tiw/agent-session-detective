@@ -74,6 +74,12 @@
       "配上的行才给出成本 ~N (EST)；没有等到正文的行记 unavailable，只留 marker 不留猜测。" +
       "reload = 压缩后正文重新出现；redundant bodies 是连续重复正文，只计数不产生行。" +
       "这里是全报告唯一出现加载成本数字的地方。",
+    "library":
+      "声明 vs 观测：catalog 的 requires 声明和日志里的真实共加载对比。共加载 = 同一 agent 作用下" +
+      "两个 skill 都被挂载（body / stub / execution；仅 listing 不算），权重 w = 出现该组合的 agent 数。" +
+      "一致 = 声明且观测到；过度声明 = 声明了但从未观测到；隐式 = 观测到但没声明，w 达到阈值才计入" +
+      "（单次出现视为巧合）。观测 id 常带命名空间前缀（superpowers:brainstorming），仅当能唯一归一到" +
+      "声明名时才参与对比——歧义的不猜，保持原样并单独列出。",
     "bill":
       "双账单：成本行回答 tokens 废在哪，路由行回答该加载的加载了吗。" +
       "行等级：事实 = 渠道直接测量；观测 = provider 遥测；证据 = 配对台账；推断 = 估算。" +
@@ -620,6 +626,101 @@
           return "<span class='dim'>" + esc(e.sample.slice(0, 90)) + "</span>";
         } },
     ]);
+    h += "</section>";
+
+    // Duplication: body copies cost the activation layer, listing collisions
+    // the resident one — the two counts never merge. Both are convention
+    // thresholds, and the waste column is the smaller side only.
+    h += "<section class='catalog-block'>";
+    h += "<h3>重复度</h3>";
+    h += "<p class='dim'>约定阈值：body containment ≥ " +
+         d.thresholds.dup_containment.toFixed(2) + " · desc jaccard ≥ " +
+         d.thresholds.desc_dup_containment.toFixed(2) + " · " +
+         d.thresholds.shingle_k + " 重窗；合并可省取较小一侧 —— 经验值，非规范要求</p>";
+    if (!d.duplicates.length) {
+      h += "<p class='ok-text'>✓ 未发现近重复</p>";
+    } else {
+      var bodyPairs = 0;
+      d.duplicates.forEach(function (p) { if (p.kind === "body") bodyPairs++; });
+      var rate = (d.dup_rate === null || d.dup_rate === undefined)
+        ? "n/a" : Math.round(d.dup_rate * 100) + "%";
+      h += "<p>body 近重复 <b>" + bodyPairs + "</b> 对 · desc 近重复 <b>" +
+           (d.duplicates.length - bodyPairs) + "</b> 对 · body 涉及占比 <b>" +
+           rate + "</b></p>";
+      var dupShown = d.duplicates.slice(0, 20);
+      h += auditRows(dupShown, [
+        { label: "口径", get: function (e) {
+            return e.kind === "body" ? "body · 激活" : "desc · 常驻"; } },
+        { label: "对", get: function (e) {
+            return esc(e.a) + " ↔ " + esc(e.b) +
+              (e.exact ? " <span class='dim'>完全相同</span>" : ""); } },
+        { label: "containment", get: function (e) {
+            return e.containment.toFixed(2); } },
+        { label: "jaccard", get: function (e) {
+            return e.jaccard.toFixed(2); } },
+        { label: "合并可省", get: function (e) {
+            return "~" + kfmt(e.waste_tokens_est); } },
+      ]);
+      if (d.duplicates.length > dupShown.length) {
+        h += "<p class='dim'>…… 另有 " +
+             (d.duplicates.length - dupShown.length) + " 对</p>";
+      }
+    }
+    h += "</section>";
+
+    // Closure: what one activation drags in, statically. Heaviest first;
+    // unresolved requires and depth truncation stay visible per entry.
+    var warn = d.thresholds.closure_warn_tokens;
+    var depth = d.thresholds.closure_depth;
+    h += "<section class='catalog-block'>";
+    h += "<h3>加载闭包</h3>";
+    h += "<p class='dim'>约定阈值：&gt;" + kfmt(warn) +
+         " tokens 偏重 · requires 深度上限 " + depth +
+         " 跳 —— 经验值，非规范要求</p>";
+    if (!d.closures.length) {
+      h += "<p class='dim'>没有可扫描正文的 skill，未产生闭包。</p>";
+    } else {
+      var heavy = 0, withDeps = 0;
+      d.closures.forEach(function (e) {
+        if (e.tokens > warn) heavy++;
+        if (e.skills.length || e.files.length) withDeps++;
+      });
+      h += "<p>偏重 <b>" + heavy + "</b> · 带依赖 <b>" + withDeps +
+           "</b> · 可扫描 <b>" + d.closures.length + "</b>（无正文 " +
+           (d.no_body ? d.no_body.length : 0) + " 个未计入）</p>";
+      var cloShown = d.closures.slice(0, 20);
+      h += "<table class='audit-table'><thead><tr><th>skill</th><th>token</th>" +
+           "<th>依赖树</th></tr></thead><tbody>";
+      cloShown.forEach(function (e) {
+        var tree = [];
+        if (e.skills.length) tree.push("→ " + e.skills.map(esc).join(", "));
+        if (e.files.length) tree.push("· " + e.files.map(esc).join(", "));
+        var marks = "";
+        if (e.unresolved.length) {
+          marks += "<div class='dim'>未解析的 requires：" +
+                   e.unresolved.map(esc).join(", ") + "</div>";
+        }
+        if (e.truncated) {
+          marks += "<div class='dim'>深度截断：" + depth +
+                   " 跳处仍有 requires 未展开</div>";
+        }
+        h += "<tr>";
+        h += "<td>" + esc(e.name) +
+             (e.tokens > warn ? " <span class='tier warn'>偏重</span>" : "") +
+             marks + "</td>";
+        h += "<td class='" + (e.tokens > warn ? "bad" : "") + "'>~" +
+             kfmt(e.tokens) + "</td>";
+        h += "<td>" + (tree.length
+          ? "<span class='dim'>" + tree.join(" ") + "</span>"
+          : "<span class='dim'>—</span>") + "</td>";
+        h += "</tr>";
+      });
+      h += "</tbody></table>";
+      if (d.closures.length > cloShown.length) {
+        h += "<p class='dim'>…… 另有 " +
+             (d.closures.length - cloShown.length) + " 个</p>";
+      }
+    }
     h += "</section>";
 
     h += "<p class='dim tiny'>token 估算器 " + esc(d.estimator) +
@@ -1226,6 +1327,64 @@
         (loadTotals.unavailable ? " · unavailable rows carry the marker, not a guess" : "") +
         "</p></section>"
       );
+    }
+
+    // declared requires vs observed co-loads: the library feedback loop.
+    // Names are joined before pairs are compared (namespaced observed ids
+    // do not equal catalog names), and the join refuses to guess.
+    if (r.library) {
+      var lib = r.library;
+      var ldiff = lib.diff || {};
+      var ljoin = lib.join || {};
+      var ltotals = ldiff.totals || {};
+      var overD = ldiff.over_declared || [];
+      var impli = ldiff.implicit || [];
+      var consi = ldiff.consistent || [];
+      var lh = "";
+      if (ltotals.observed === 0 && ltotals.declared === 0) {
+        lh += "<p class='dim'>既无声明 requires 对，也无共加载观测（listing 之类不算加载）。</p>";
+      } else {
+        var odShown = overD.slice(0, 20);
+        lh += "<p><b>一致</b>（声明且观测到）</p>" + auditRows(consi, [
+          { label: "a", get: function (e) { return esc(e.a); } },
+          { label: "b", get: function (e) { return esc(e.b); } },
+          { label: "w", get: function (e) { return String(e.weight); } },
+        ]);
+        lh += "<p><b>过度声明</b>（声明了但从未观测到共载）</p>" + auditRows(odShown, [
+          { label: "a", get: function (e) { return esc(e.a); } },
+          { label: "b", get: function (e) { return esc(e.b); } },
+        ]);
+        if (overD.length > odShown.length) {
+          lh += "<p class='dim'>…… 另有 " + (overD.length - odShown.length) + " 对</p>";
+        }
+        var imShown = impli.slice(0, 20);
+        lh += "<p><b>隐式共载</b>（观测到但 catalog 未声明）</p>" + auditRows(imShown, [
+          { label: "a", get: function (e) { return esc(e.a); } },
+          { label: "b", get: function (e) { return esc(e.b); } },
+          { label: "w", get: function (e) { return String(e.weight); } },
+        ]);
+        if (impli.length > imShown.length) {
+          lh += "<p class='dim'>…… 另有 " + (impli.length - imShown.length) + " 对</p>";
+        }
+      }
+      var renamedN = ljoin.renamed ? Object.keys(ljoin.renamed).length : 0;
+      if (renamedN) {
+        lh += "<p class='dim'>" + renamedN +
+          " 个观测 id 按唯一命名空间后缀归一到声明名</p>";
+      }
+      if (ljoin.ambiguous && ljoin.ambiguous.length) {
+        lh += "<p class='dim'>" + ljoin.ambiguous.length +
+          " 个观测 id 无法唯一归属声明名（拒绝猜测），未参与对比：" +
+          esc(ljoin.ambiguous.slice(0, 10).join(", ")) +
+          (ljoin.ambiguous.length > 10 ? " …" : "") + "</p>";
+      }
+      parts.push("<section id='library'><h2>声明 vs 观测 · requires ↔ 共加载 " +
+        helpDot("library") + "</h2>" +
+        "<p class='dim'>声明 " + (ltotals.declared || 0) + " 对 · 观测 " +
+        (ltotals.observed || 0) + " 对 · 隐式阈值 w≥" +
+        (ltotals.implicit_min_weight || 2) +
+        "（单次出现视为巧合）；w = 出现该组合的 agent 数</p>" +
+        lh + "</section>");
     }
 
     parts.push(renderTokenStats(r.token_stats));
