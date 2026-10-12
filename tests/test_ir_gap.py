@@ -112,3 +112,37 @@ class JoinAndSetsTest(unittest.TestCase):
         self.assertTrue(gap["unjudged"]["judge_unconfigured"])
         self.assertEqual(gap["unjudged"]["count"], 1)
         self.assertIn("judge not configured", gap["notes"][0])
+
+    def test_triggered_judgment_becomes_missed_trigger_with_skill_id(self):
+        skills = [entity("beta", ("listing",))]
+        catalog = [make_skill("beta")]
+        gap = skill_gaps(skills, catalog, [make_judgment("beta", triggered=True)])
+        missed = gap["missed_triggers"]
+        self.assertEqual(len(missed), 1)
+        self.assertEqual(missed[0]["skill_id"], "beta")
+        self.assertEqual(missed[0]["evidence"], "please use beta")
+        self.assertEqual(gap["unjudged"]["judge_errors"], 0)
+
+    def test_triggered_unmatched_judgment_keeps_skill_id_none(self):
+        skills = [entity("beta", ("listing",))]
+        gap = skill_gaps(skills, [make_skill("beta")],
+                         [make_judgment("nowhere", triggered=True)])
+        missed = gap["missed_triggers"]
+        self.assertEqual(len(missed), 1)
+        self.assertIsNone(missed[0]["skill_id"])
+
+    def test_error_judgment_counts_as_defect_not_missed(self):
+        skills = [entity("beta", ("listing",))]
+        catalog = [make_skill("beta")]
+        gap = skill_gaps(skills, catalog,
+                         [make_judgment("beta", triggered=True, error="boom"),
+                          make_judgment("beta")],
+                         stats={"listed_unloaded": 1, "candidates": 2,
+                                "prefiltered": 0},
+                         judge_configured=True)
+        self.assertEqual(gap["missed_triggers"], [])
+        self.assertEqual(gap["unjudged"]["judge_errors"], 1)
+        # 2 candidates, 2 judgments (1 defect): nothing truncated — the error
+        # row counts once, in judge_errors, never in over_limit
+        self.assertEqual(gap["unjudged"]["over_limit"], 0)
+        self.assertEqual(gap["unjudged"]["count"], 1)

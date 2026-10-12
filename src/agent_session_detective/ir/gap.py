@@ -20,6 +20,7 @@ from __future__ import annotations
 from typing import Dict, List, Optional, Sequence, Tuple
 
 from ..catalog import Skill
+from ..judge import Judgment
 from .schema import ContentItem, SkillEntity
 
 
@@ -51,7 +52,8 @@ def _counts(skills: Sequence[SkillEntity]) -> Dict[str, dict]:
     return out
 
 
-def _join(counts: Dict[str, dict], catalog: Sequence[Skill]):
+def _join(counts: Dict[str, dict],
+          catalog: Sequence[Skill]) -> Tuple[Dict[str, Skill], List[dict], int]:
     """Match IR ids (+aliases) against catalog names, lowercased.
 
     Returns ``(matched: skill_id -> Skill, ir_only rows, catalog_only count)``.
@@ -76,7 +78,7 @@ def _join(counts: Dict[str, dict], catalog: Sequence[Skill]):
             matched[skill_id] = hit
     matched_catalog_names = {s.name.lower() for s in matched.values()}
     catalog_only = len(by_name) - len(matched_catalog_names)
-    return matched, ir_only, catalog_only
+    return matched, sorted(ir_only, key=lambda row: row["skill_id"]), catalog_only
 
 
 def _describe(counts: Dict[str, dict], matched: Dict[str, Skill],
@@ -93,7 +95,7 @@ def _describe(counts: Dict[str, dict], matched: Dict[str, Skill],
 
 
 def skill_gaps(skills: Sequence[SkillEntity], catalog: Sequence[Skill],
-               judgments, stats: Optional[dict] = None,
+               judgments: Sequence[Judgment], stats: Optional[dict] = None,
                judge_configured: bool = True) -> dict:
     """The GAP block: join health, candidate pool, verdicts, leftovers.
 
@@ -129,16 +131,17 @@ def skill_gaps(skills: Sequence[SkillEntity], catalog: Sequence[Skill],
             })
 
     candidates = stats["candidates"] if stats else 0
-    # judged_ok excludes defects: an error row means this candidate has no
-    # valid verdict, so it counts as unjudged. When the judge never ran,
-    # judged_ok is 0 and every candidate lands here — which is the truth.
-    judged_ok = sum(1 for j in judgments if not j.error)
-    over_limit = (candidates - judged_ok) if stats else 0
+    judged = len(judgments)
+    # over_limit is truncation only (judge ran but stopped early): the
+    # candidates the judge never reached. Defect rows are counted once, in
+    # judge_errors — never here too. A floor of 0 keeps stray surplus
+    # judgments from producing negative counts.
+    over_limit = max(0, candidates - judged) if stats else 0
     prefiltered = stats["prefiltered"] if stats else 0
     if stats and not judge_configured:
         unjudged_count = stats["listed_unloaded"]
     else:
-        unjudged_count = prefiltered + over_limit
+        unjudged_count = prefiltered + over_limit + judge_errors
     unjudged = {
         "count": unjudged_count,
         "prefiltered": prefiltered,
