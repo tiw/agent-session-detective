@@ -1164,5 +1164,76 @@ class UploadStoreTests(unittest.TestCase):
             self.assertTrue(outside.exists())
 
 
+class UploadRouteTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        import threading
+
+        cls._orig = web.UPLOADS_DIR
+        web.UPLOADS_DIR = Path(tempfile.mkdtemp())
+        cls.server = ThreadingHTTPServer(("127.0.0.1", 0), web.Handler)
+        cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
+        cls.thread.start()
+        cls.base = "http://127.0.0.1:%d" % cls.server.server_address[1]
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server.shutdown()
+        cls.server.server_close()
+        shutil.rmtree(web.UPLOADS_DIR, True)
+        web.UPLOADS_DIR = cls._orig
+
+    def test_upload_round_trips_into_the_session_listing(self):
+        request = urllib.request.Request(
+            self.base + "/api/upload?name=" + urllib.parse.quote(
+                "53e08e97-70ce-4aff-8647-c49b4f408d83-x.jsonl"),
+            data=qoder_transcript_text().encode("utf-8"), method="POST")
+        with urllib.request.urlopen(request) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+
+        self.assertFalse(payload["dedup"])
+        with patch.object(web, "DEFAULT_ROOTS", []):
+            sessions = web.discover_sessions()
+        entry = [s for s in sessions if s["path"] == payload["session"]["path"]]
+        self.assertEqual(len(entry), 1)
+        self.assertTrue(entry[0]["uploaded"])
+
+    def test_garbage_upload_is_rejected_with_400(self):
+        request = urllib.request.Request(
+            self.base + "/api/upload?name=bad.jsonl",
+            data=b"garbage", method="POST")
+        with self.assertRaises(urllib.error.HTTPError) as ctx:
+            urllib.request.urlopen(request)
+        self.assertEqual(ctx.exception.code, 400)
+        self.assertEqual(list(web.UPLOADS_DIR.glob("*.jsonl")), [])
+
+    def test_delete_removes_an_uploaded_session(self):
+        request = urllib.request.Request(
+            self.base + "/api/upload?name=del.jsonl",
+            data=qoder_transcript_text().encode("utf-8"), method="POST")
+        with urllib.request.urlopen(request) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+
+        delete = urllib.request.Request(
+            self.base + "/api/upload?path=" + urllib.parse.quote(
+                payload["session"]["path"]), method="DELETE")
+        with urllib.request.urlopen(delete) as response:
+            self.assertEqual(
+                json.loads(response.read().decode("utf-8"))["deleted"], "del.jsonl")
+        self.assertFalse(Path(payload["session"]["path"]).exists())
+
+    def test_delete_refuses_foreign_paths(self):
+        with tempfile.TemporaryDirectory() as elsewhere:
+            outside = Path(elsewhere) / "rollout-x.jsonl"
+            outside.write_text("{}", encoding="utf-8")
+            request = urllib.request.Request(
+                self.base + "/api/upload?path=" + urllib.parse.quote(str(outside)),
+                method="DELETE")
+            with self.assertRaises(urllib.error.HTTPError) as ctx:
+                urllib.request.urlopen(request)
+            self.assertEqual(ctx.exception.code, 404)
+            self.assertTrue(outside.exists())
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1155,6 +1155,21 @@ class Handler(BaseHTTPRequestHandler):
                 return
             self._send_json(200, run_catalog_audit(payload))
             return
+        if parsed.path == "/api/upload":
+            params = parse_qs(parsed.query)
+            name = (params.get("name") or [""])[0] or (
+                "upload-%d.jsonl" % int(time.time()))
+            length = int(self.headers.get("Content-Length", 0))
+            if length > MAX_UPLOAD_BYTES:
+                self._send_json(413, {"error": "upload too large"})
+                return
+            body = self.rfile.read(length) if length else b""
+            try:
+                self._send_json(200, store_upload(body, name))
+            except UploadRejected as exc:
+                self._send_json(
+                    400, {"error": "not an analyzable session file: %s" % exc})
+            return
         if parsed.path != "/api/audit":
             self._send_json(404, {"error": "not found"})
             return
@@ -1179,6 +1194,22 @@ class Handler(BaseHTTPRequestHandler):
                 return
         job = start_job(params)
         self._send_json(202, {"job_id": job.id})
+
+    def do_DELETE(self) -> None:
+        parsed = urlparse(self.path)
+        if parsed.path != "/api/upload":
+            self._send_json(404, {"error": "not found"})
+            return
+        params = parse_qs(parsed.query)
+        path = (params.get("path") or [""])[0]
+        if not path:
+            self._send_json(400, {"error": "path required"})
+            return
+        stored = delete_upload(path)
+        if stored is None:
+            self._send_json(404, {"error": "no such upload"})
+            return
+        self._send_json(200, {"deleted": stored})
 
 
 def serve(port: int = 8471) -> None:
