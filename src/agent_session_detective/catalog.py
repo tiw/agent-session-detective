@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-DEFAULT_SKILL_DIRS = ("~/.agents/skills", "~/.kimi/skills")
+DEFAULT_SKILL_DIRS = ("~/.agents/skills", "~/.kimi/skills", "~/.qoder/skills")
 
 FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.DOTALL)
 

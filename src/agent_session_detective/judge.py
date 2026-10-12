@@ -161,8 +161,14 @@ def summarize_turns(timeline: Timeline, per_turn_limit: int = 600) -> str:
 def judge_session(
     timeline: Timeline, skills: List[Skill], judge: Judge, limit: Optional[int] = None
 ) -> List[Judgment]:
-    consumed = {n.lower() for n in timeline.consumed_skill_names()}
-    candidates = [s for s in skills if s.name.lower() not in consumed]
+    """Judge exactly the candidates given; the caller owns filtering.
+
+    The counterfactual question only makes sense for skills the session
+    never loaded, and IR evidence decides that — so this function trusts
+    the caller's list instead of re-filtering through the older timeline
+    view, whose consumed set can disagree with IR observations.
+    """
+    candidates = list(skills)
     if limit:
         candidates = candidates[:limit]
     turns_block = summarize_turns(timeline)
