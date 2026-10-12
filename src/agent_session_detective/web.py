@@ -548,6 +548,25 @@ def discover_sessions(roots: Optional[List[str]] = None) -> List[dict]:
                 "workspace": codex_file.parent.name,  # date folder
                 "mtime": mtime,
             }
+    # Uploaded sessions: user-provided files persisted under UPLOADS_DIR.
+    # Same listing shape as scanned sessions; the flag drives the upload
+    # badge and the row delete button in the UI.
+    if UPLOADS_DIR.is_dir():
+        for transcript in UPLOADS_DIR.glob("*.jsonl"):
+            try:
+                mtime = transcript.stat().st_mtime
+            except OSError:
+                continue
+            source_key = "upload:%s" % transcript.resolve()
+            if source_key in found and found[source_key]["mtime"] >= mtime:
+                continue
+            found[source_key] = {
+                "id": transcript.stem,
+                "path": str(transcript),
+                "workspace": "upload",
+                "mtime": mtime,
+                "uploaded": True,
+            }
     return sorted(found.values(), key=lambda s: -s["mtime"])
 
 

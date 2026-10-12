@@ -201,6 +201,15 @@ class CodexCliTests(unittest.TestCase):
 class CodexWebTests(unittest.TestCase):
     """Test web discovery with Codex sessions."""
 
+    def setUp(self):
+        # Web discovery merges uploaded sessions; keep this class blind to
+        # whatever the real uploads dir on this machine happens to hold.
+        uploads = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, uploads, True)
+        patcher = patch("agent_session_detective.web.UPLOADS_DIR", uploads)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def test_discovers_codex_session_file(self):
         """Web discovery should find Codex session files."""
         with tempfile.TemporaryDirectory() as directory:

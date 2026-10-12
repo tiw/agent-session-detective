@@ -21,7 +21,23 @@ from agent_session_detective.web import cache_load, cache_store, discover_sessio
 FIXTURES = Path(__file__).parent / "fixtures"
 
 
+def isolate_uploads(test):
+    """Point web.UPLOADS_DIR at a fresh empty dir for one test.
+
+    Discovery merges uploads rows unconditionally, so any test asserting
+    exact session listings must not see whatever this machine happens to
+    keep in the real uploads directory."""
+    original = web.UPLOADS_DIR
+    directory = Path(tempfile.mkdtemp())
+    web.UPLOADS_DIR = directory
+    test.addCleanup(shutil.rmtree, directory, True)
+    test.addCleanup(setattr, web, "UPLOADS_DIR", original)
+
+
 class QoderWebTests(unittest.TestCase):
+    def setUp(self):
+        isolate_uploads(self)
+
     def test_discovers_qoder_transcript_file(self):
         with tempfile.TemporaryDirectory() as directory:
             base = Path(directory)
@@ -117,6 +133,9 @@ class SessionDiscoveryScopeTests(unittest.TestCase):
     <ws>/<session>/subagents/. The first two belong in the sidebar; only the
     subagent mirrors must stay out."""
 
+    def setUp(self):
+        isolate_uploads(self)
+
     def test_does_not_discover_qoder_subagent_files_as_codex_sessions(self):
         with tempfile.TemporaryDirectory() as directory:
             base = Path(directory)
@@ -182,6 +201,9 @@ class SessionQueryTests(unittest.TestCase):
     discovery finds hundreds. A session that fell out of the top N must still
     be reachable by searching its id or workspace."""
 
+    def setUp(self):
+        isolate_uploads(self)
+
     def test_query_reaches_a_session_beyond_the_sidebar_limit(self):
         with tempfile.TemporaryDirectory() as directory:
             base = Path(directory)
@@ -242,6 +264,9 @@ class SessionQueryTests(unittest.TestCase):
 
 class SessionQueryRouteTests(unittest.TestCase):
     """GET /api/sessions?q=... passes the query through to list_sessions."""
+
+    def setUp(self):
+        isolate_uploads(self)
 
     @classmethod
     def setUpClass(cls):
@@ -882,6 +907,9 @@ class RunAuditBilledTests(unittest.TestCase):
 class FleetClassTotalsTests(unittest.TestCase):
     BILLING_UUID = "3b241101-e2bb-4255-8caf-4136c566a962"
 
+    def setUp(self):
+        isolate_uploads(self)
+
     def test_fleet_payload_carries_repeat_class_totals(self):
         with tempfile.TemporaryDirectory() as directory:
             base = Path(directory)
@@ -1233,6 +1261,27 @@ class UploadRouteTests(unittest.TestCase):
                 urllib.request.urlopen(request)
             self.assertEqual(ctx.exception.code, 404)
             self.assertTrue(outside.exists())
+
+
+class UploadDiscoveryTests(unittest.TestCase):
+    def test_uploaded_sessions_join_the_discovery_listing(self):
+        with tempfile.TemporaryDirectory() as directory:
+            scanned = Path(directory) / "ws" / "transcript.jsonl"
+            scanned.parent.mkdir()
+            scanned.write_text("{}", encoding="utf-8")
+            uploads = Path(tempfile.mkdtemp())
+            self.addCleanup(shutil.rmtree, uploads, True)
+            (uploads / "53e08e97-export.jsonl").write_text(
+                qoder_transcript_text(), encoding="utf-8")
+
+            with patch.object(web, "UPLOADS_DIR", uploads):
+                sessions = web.discover_sessions([str(Path(directory))])
+
+            by_path = {s["path"]: s for s in sessions}
+            self.assertTrue(by_path[str(scanned)].get("uploaded") is not True)
+            uploaded = by_path[str(uploads / "53e08e97-export.jsonl")]
+            self.assertTrue(uploaded["uploaded"])
+            self.assertEqual(uploaded["workspace"], "upload")
 
 
 if __name__ == "__main__":
