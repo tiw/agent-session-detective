@@ -97,6 +97,17 @@ class JoinAndSetsTest(unittest.TestCase):
         self.assertEqual(
             gap["loaded_unused"][0]["description"], "Use when testing.")
 
+    def test_exotic_case_folds_on_both_sides(self):
+        # ß casefolds to "ss" on the IR side; the catalog side must
+        # casefold too, else "Straße" never joins the IR key "strasse"
+        skills = [entity("straße", ("listing",))]
+        catalog = [make_skill("Straße")]
+        gap = skill_gaps(skills, catalog, [])
+
+        self.assertEqual(gap["join"]["matched"], 1)
+        self.assertEqual(gap["join"]["ir_only"], [])
+        self.assertEqual(gap["join"]["catalog_only"], 0)
+
     def test_stub_counts_as_loaded(self):
         skills = [entity("beta", ("listing", "stub"))]
         gap = skill_gaps(skills, [make_skill("beta")], [])

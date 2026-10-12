@@ -10,18 +10,20 @@ Three sources meet here, each keeping its own epistemic status:
 - ``judgments``: counterfactual trigger verdicts about never-loaded
   candidates. LLM output, carried with verbatim evidence or discarded.
 
-The join key is the lowercased skill name across IR skill ids (plus
+The join key is the casefolded skill name across IR skill ids (plus
 identity-merge aliases) and catalog names. Join failures are findings,
 not guesses: they are listed as ``ir_only``, never renamed to match.
 """
 
 from __future__ import annotations
 
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import TYPE_CHECKING, Dict, List, Optional, Sequence, Tuple
 
 from ..catalog import Skill
-from ..judge import Judgment
 from .schema import ContentItem, SkillEntity
+
+if TYPE_CHECKING:
+    from ..judge import Judgment
 
 
 def _counts(skills: Sequence[SkillEntity]) -> Dict[str, dict]:
@@ -36,12 +38,10 @@ def _counts(skills: Sequence[SkillEntity]) -> Dict[str, dict]:
             "bodies": 0,
             "stubs": 0,
             "executed": 0,
-            "listing_tokens_est": 0,
         })
         for obs in skill.observations:
             if obs.kind == "listing":
                 entry["listed"] += 1
-                entry["listing_tokens_est"] += obs.tokens_est
             elif obs.kind == "body":
                 entry["bodies"] += 1
             elif obs.kind == "stub":
@@ -61,13 +61,13 @@ def _join_keys(entry: dict) -> List[str]:
 
 def _join(counts: Dict[str, dict],
           catalog: Sequence[Skill]) -> Tuple[Dict[str, Skill], List[dict], int]:
-    """Match IR ids (+aliases) against catalog names, lowercased.
+    """Match IR ids (+aliases) against catalog names, casefolded.
 
     Returns ``(matched: skill_id -> Skill, ir_only rows, catalog_only count)``.
     """
     by_name: Dict[str, Skill] = {}
     for skill in catalog:
-        by_name.setdefault(skill.name.lower(), skill)
+        by_name.setdefault(skill.name.casefold(), skill)
     matched: Dict[str, Skill] = {}
     ir_only: List[dict] = []
     for skill_id, entry in counts.items():
@@ -83,7 +83,7 @@ def _join(counts: Dict[str, dict],
             })
         else:
             matched[skill_id] = hit
-    matched_catalog_names = {s.name.lower() for s in matched.values()}
+    matched_catalog_names = {s.name.casefold() for s in matched.values()}
     catalog_only = len(by_name) - len(matched_catalog_names)
     return matched, sorted(ir_only, key=lambda row: row["skill_id"]), catalog_only
 
