@@ -194,6 +194,23 @@ class SkillGapSectionTests(unittest.TestCase):
         self.assertIn("IR-only (no catalog entry)", html)
         self.assertIn("ghost", html)
 
+    def test_missed_trigger_turn_is_escaped(self):
+        gap = gap_block()
+        gap["missed_triggers"] = [
+            {"skill_id": "beta", "name": "beta",
+             "turn": "<img src=x onerror=alert(1)>",
+             "rationale": "r", "evidence": "e", "confidence": 0.9}]
+        html = self.render_with_gap(gap)
+        self.assertNotIn("<img src=x", html)
+        self.assertIn("&lt;img", html)
+
+    def test_missed_trigger_turn_none_renders_dash(self):
+        gap = gap_block()
+        for m in gap["missed_triggers"]:
+            m["turn"] = None
+        html = self.render_with_gap(gap)
+        self.assertIn("&mdash;", html)
+
     def test_judge_off_notice_when_unconfigured(self):
         gap = gap_block()
         gap["unjudged"]["judge_unconfigured"] = True

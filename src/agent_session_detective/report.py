@@ -482,12 +482,12 @@ def render_report(
                     "<tr><td>%s%s</td><td>%s</td><td>%.2f</td><td>%s</td>"
                     "<td><pre>%s</pre></td></tr>"
                     % (esc(m["name"]), injected_badge(m["name"]),
-                       m["turn"] if m["turn"] is not None else "&mdash;",
+                       esc(m["turn"]) if m["turn"] is not None else "&mdash;",
                        m["confidence"], esc(m["rationale"]),
                        esc(m["evidence"])))
             parts.append("</table>")
         elif judge_enabled:
-            parts.append("<p class='dim'>no missed triggers judged.</p>")
+            parts.append("<p class='dim'>No missed triggers found among the judged skills.</p>")
         if gap["loaded_unused"]:
             parts.append("<h3>loaded but never executed</h3>"
                          "<table><tr><th>skill</th><th>declared use</th>"

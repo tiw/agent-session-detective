@@ -193,7 +193,7 @@ def main(argv=None) -> int:
               file=sys.stderr)
         judgments = judge_session(
             timeline, [skill for _, skill in candidate_pairs], judge,
-            limit=args.judge_limit)
+            limit=n)
     else:
         print("Judge not configured; facts only. See ASD_JUDGE_* env vars.", file=sys.stderr)
     gap = skill_gaps(

@@ -61,3 +61,12 @@ class JudgeSessionCandidatesTest(unittest.TestCase):
         judge_session(FakeTimeline(), catalog, judge, limit=1)
 
         self.assertEqual(judge.asked, ["alpha"])
+
+    def test_limit_zero_judges_nothing(self):
+        judge = StubJudge()
+        catalog = [make_skill("alpha"), make_skill("beta")]
+
+        judgments = judge_session(FakeTimeline(), catalog, judge, limit=0)
+
+        self.assertEqual(judge.asked, [])
+        self.assertEqual(judgments, [])

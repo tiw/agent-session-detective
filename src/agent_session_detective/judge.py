@@ -169,7 +169,7 @@ def judge_session(
     view, whose consumed set can disagree with IR observations.
     """
     candidates = list(skills)
-    if limit:
+    if limit is not None:
         candidates = candidates[:limit]
     turns_block = summarize_turns(timeline)
     return [judge.judge_skill(skill, turns_block) for skill in candidates]
