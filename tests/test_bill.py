@@ -60,6 +60,7 @@ def bill(**overrides):
         "file_read_count": 0,
         "adapter_id": "qoder",
         "judge_enabled": False,
+        "process": None,
     }
     params.update(overrides)
     return build_bill(**params)
@@ -189,6 +190,31 @@ class RoutingTest(unittest.TestCase):
         routing = bill()["routing"]
         self.assertEqual(routing["lines"], [])
         self.assertFalse(routing["enabled"])
+
+
+class CeremonyRowTests(unittest.TestCase):
+    def test_ceremony_row_sums_listing_and_protocol_without_est_share(self):
+        process = {"listing": {"reinject_tokens_est": 200}}
+        out = bill(process=process)  # ts() base has post_compaction 400
+        by_key = {row["key"]: row for row in out["cost_rows"]}
+        row = by_key["ceremony"]
+        self.assertEqual(row["tokens_est"], 600)
+        self.assertIsNone(row["share"])
+        self.assertIn("listing 重注入 ~200", row["detail"])
+        self.assertIn("协议重读 ~400", row["detail"])
+        # display-only lens: ceremony never enters the EST subtotal
+        self.assertEqual(out["est_subtotal"], 14500)
+
+    def test_no_process_block_keeps_the_six_rows(self):
+        out = bill()
+        self.assertNotIn(
+            "ceremony", {row["key"] for row in out["cost_rows"]})
+
+    def test_zero_ceremony_omits_row(self):
+        process = {"listing": {"reinject_tokens_est": 0}}
+        out = bill(process=process, token_stats=ts(repeat_class_totals={}))
+        self.assertNotIn(
+            "ceremony", {row["key"] for row in out["cost_rows"]})
 
 
 if __name__ == "__main__":

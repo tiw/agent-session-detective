@@ -83,7 +83,7 @@ def _routing(expectations, judgments, if_results, file_read_count,
 
 
 def _cost_rows(token_stats, skill_loads_block, returns_block,
-               billed_series):
+               billed_series, process=None):
     rows = []
     buckets = token_stats.get("bucket_totals") or {}
     growth = sum(buckets.values())
@@ -110,6 +110,19 @@ def _cost_rows(token_stats, skill_loads_block, returns_block,
                      "detail": "压缩恢复 ~%d · 其余 ~%d"
                                "（extra 总量是重读税下界）"
                                % (post, max(0, extra - post)),
+                     "anchor": "#tokens", "grade": GRADE_EST})
+    # The lens exists only when the caller computed a process signature;
+    # both components already sit in other rows, so this is display-only.
+    listing_extra = ((process or {}).get("listing") or {}) \
+        .get("reinject_tokens_est") or 0
+    protocol = ((token_stats.get("repeat_class_totals") or {})
+                .get("post_compaction") or 0)
+    if process is not None and (listing_extra or protocol):
+        rows.append({"key": "ceremony", "label": "仪式开销",
+                     "tokens_est": listing_extra + protocol, "share": None,
+                     "detail": "listing 重注入 ~%d · 协议重读 ~%d"
+                               "（透镜行：分别已含于上下文增长与重复注入税，"
+                               "不入 EST 小计）" % (listing_extra, protocol),
                      "anchor": "#tokens", "grade": GRADE_EST})
     load_totals = (skill_loads_block or {}).get("totals") or {}
     if load_totals.get("loads"):
@@ -162,9 +175,10 @@ def _cost_rows(token_stats, skill_loads_block, returns_block,
 
 def build_bill(token_stats, skill_loads, returns, expectations, judgments,
                if_results, billed_series, file_read_count, adapter_id,
-               judge_enabled):
+               judge_enabled, process=None):
     """The bill: cost rows + routing lines + billed block + notes."""
-    rows = _cost_rows(token_stats, skill_loads, returns, billed_series)
+    rows = _cost_rows(token_stats, skill_loads, returns, billed_series,
+                      process)
     by_key = {row["key"]: row for row in rows}
     est_subtotal = sum(by_key[key]["tokens_est"] or 0
                        for key in EST_ROW_KEYS if key in by_key)
