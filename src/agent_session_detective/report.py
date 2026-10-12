@@ -303,6 +303,7 @@ def render_report(
     no_self_invoke: Optional[set] = None,
     document: Optional["AuditDocument"] = None,
     injected_skills: Optional[dict] = None,
+    gap: Optional[dict] = None,
 ) -> str:
     if_results = if_results or []
     missed = [j for j in judgments if j.triggered]
@@ -446,6 +447,71 @@ def render_report(
             "<p class='meta'>%d judgments discarded as tool defects (no verifiable evidence): %s</p>"
             % (len(errors), esc(", ".join(sorted({e.error or "" for e in errors}))))
         )
+
+    # --- Skill GAP (expectation vs actual) ---
+    # Three sources with different epistemic status: IR observations are
+    # log facts, catalog wording is what the agent saw, judgments are LLM
+    # output carried with verbatim evidence. The section never presents a
+    # judgment as a fact.
+    if gap is not None:
+        join = gap["join"]
+        sets = gap["sets"]
+        parts.append("<h2>Skill GAP</h2>")
+        parts.append(
+            "<p class='dim'>catalog matched %d · IR-only %d · catalog-only %d"
+            " · listed %d / loaded %d / executed %d</p>"
+            % (join["matched"], len(join["ir_only"]), join["catalog_only"],
+               sets["listed"], sets["loaded"], sets["executed"]))
+        unjudged = gap["unjudged"]
+        if unjudged["judge_unconfigured"]:
+            parts.append(
+                "<div class='notice'>Trigger judging is off — trigger GAPs "
+                "not evaluated; structural GAPs below are still log facts.</div>")
+        elif unjudged["count"] or unjudged["judge_errors"]:
+            parts.append(
+                "<p class='dim'>unjudged: %d (prefiltered %d · over limit %d)"
+                " · judge defects %d</p>"
+                % (unjudged["count"], unjudged["prefiltered"],
+                   unjudged["over_limit"], unjudged["judge_errors"]))
+        if gap["missed_triggers"]:
+            parts.append("<h3>missed triggers</h3><table><tr><th>skill</th>"
+                         "<th>turn</th><th>confidence</th><th>rationale</th>"
+                         "<th>evidence (verbatim)</th></tr>")
+            for m in gap["missed_triggers"]:
+                parts.append(
+                    "<tr><td>%s%s</td><td>%s</td><td>%.2f</td><td>%s</td>"
+                    "<td><pre>%s</pre></td></tr>"
+                    % (esc(m["name"]), injected_badge(m["name"]),
+                       esc(m["turn"]) if m["turn"] is not None else "&mdash;",
+                       m["confidence"], esc(m["rationale"]),
+                       esc(m["evidence"])))
+            parts.append("</table>")
+        elif judge_enabled:
+            parts.append("<p class='dim'>No missed triggers found among the judged skills.</p>")
+        if gap["loaded_unused"]:
+            parts.append("<h3>loaded but never executed</h3>"
+                         "<table><tr><th>skill</th><th>declared use</th>"
+                         "<th>bodies</th><th>stubs</th></tr>")
+            for row in gap["loaded_unused"]:
+                parts.append(
+                    "<tr><td>%s%s</td><td>%s</td><td>%d</td><td>%d</td></tr>"
+                    % (esc(row["name"]), injected_badge(row["name"]),
+                       esc(row["description"]) if row["description"]
+                       else "<span class='meta'>no catalog entry</span>",
+                       row["bodies"], row["stubs"]))
+            parts.append("</table>")
+        if join["ir_only"]:
+            parts.append("<h3>IR-only (no catalog entry)</h3><table>"
+                         "<tr><th>skill</th><th>listed</th><th>loaded</th>"
+                         "<th>executed</th></tr>")
+            for row in join["ir_only"]:
+                parts.append(
+                    "<tr><td>%s</td><td>%d</td><td>%d</td><td>%d</td></tr>"
+                    % (esc(row["skill_id"]), row["listed"], row["loaded"],
+                       row["executed"]))
+            parts.append("</table>")
+        for note in gap["notes"]:
+            parts.append("<p class='dim'>%s</p>" % esc(note))
 
     # --- Instruction Following ---
     if if_results:

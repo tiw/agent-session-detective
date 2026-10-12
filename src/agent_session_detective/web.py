@@ -134,7 +134,9 @@ def fingerprint(session_path: str, judge_model: str) -> str:
     # rows and would keep rendering the "no context telemetry" gap note.
     # v11 adds the bill + subagent_returns payload blocks (P0-1): v10
     # cached results would render without the bill card.
-    return "%.3f:%d:%s:v11:ir%s" % (newest, total, judge_model, IR_VERSION)
+    # v12 adds the skill_gaps payload block (skill gap analysis): v11
+    # cached results would render the GAP panel empty.
+    return "%.3f:%d:%s:v12:ir%s" % (newest, total, judge_model, IR_VERSION)
 
 
 def cache_load(key: str, fp: str) -> Optional[dict]:
@@ -935,13 +937,30 @@ def run_audit(job: Job) -> None:
         if injected:
             catalog = merge_catalog(catalog, injected)
             job.mark("merged %d injected skills" % len(injected))
+        # The IR document is built before judging: the gap candidate pool
+        # (listed but never loaded, by IR evidence) is what the judge sees.
+        job.mark("building IR document")
+        from .ir.analyses import skill_loads as skill_loads_rollup
+        from .ir.analyses import subagent_returns as subagent_returns_rollup
+        from .ir.builder import build_audit_document
+        from .ir.gap import gap_candidates, skill_gaps
+        from .ir.library import library_report
+        adapter_id = _ir_adapter_id(session, source_path)
+        document = build_audit_document(session, adapter_id)
+        # The declared-vs-observed diff needs the loaded catalog, so it is
+        # assembled here — build_analyses stays document-pure.
+        declared = {skill.name: skill.requires for skill in catalog}
+        library_block = library_report(document, declared)
+        candidate_pairs, gap_stats = gap_candidates(
+            document.skills, document.items, catalog)
         judge = Judge.from_env()
         judgments: List[Judgment] = []
         judge_enabled = judge is not None
         if judge_enabled and job.params.get("judge_triggers"):
-            unconsumed = max(len(catalog) - len(timeline.consumed_skill_names()), 0)
-            job.mark("judging %d unconsumed skills (%s)" % (unconsumed, judge.model))
-            judgments = judge_session(timeline, catalog, judge)
+            job.mark("judging %d gap candidates (%s)"
+                     % (len(candidate_pairs), judge.model))
+            judgments = judge_session(
+                timeline, [skill for _, skill in candidate_pairs], judge)
         if_results: List[IFResult] = []
         if judge_enabled and job.params.get("steps"):
             for playbook in job.params["steps"]:
@@ -966,20 +985,6 @@ def run_audit(job: Job) -> None:
             compaction_windows=compaction_windows,
             compaction_source=compaction_source,
             billed_series=billed_series)
-        # The IR document is built here so the result carries the
-        # evidence-backed load ledger (IR 1.1) — the web layer previously
-        # imported no IR.
-        from .ir.analyses import skill_loads as skill_loads_rollup
-        from .ir.analyses import subagent_returns as subagent_returns_rollup
-        from .ir.builder import build_audit_document
-        from .ir.library import library_report
-
-        adapter_id = _ir_adapter_id(session, source_path)
-        document = build_audit_document(session, adapter_id)
-        # The declared-vs-observed diff needs the loaded catalog, so it is
-        # assembled here — build_analyses stays document-pure.
-        declared = {skill.name: skill.requires for skill in catalog}
-        library_block = library_report(document, declared)
         expected = job.params.get("expect") or []
         consumed = {n.lower() for n in timeline.consumed_skill_names()}
         expectations = [
@@ -997,6 +1002,9 @@ def run_audit(job: Job) -> None:
         missed = [f["skill_name"] for f in judgments_block["missed"]]
         load_block = skill_loads_rollup(document)
         returns_block = subagent_returns_rollup(document)
+        gap_block = skill_gaps(
+            document.skills, catalog, judgments, stats=gap_stats,
+            judge_configured=judge_enabled)
         load_totals = load_block["totals"]
         token_stats_block = tokenstats_to_dict(token_stats)
         if_block = if_results_to_dict(if_results)
@@ -1032,6 +1040,7 @@ def run_audit(job: Job) -> None:
             "bill": bill,
             "subagent_returns": returns_block,
             "library": library_block,
+            "skill_gaps": gap_block,
             "no_self_invoke": sorted(
                 s.name for s in catalog if s.disable_model_invocation
             ),

@@ -74,7 +74,7 @@ class QoderWebTests(unittest.TestCase):
                 },
             )
 
-    def test_fingerprint_uses_v11_and_ir_version_for_transcript_file_metadata(self):
+    def test_fingerprint_uses_v12_and_ir_version_for_transcript_file_metadata(self):
         with tempfile.TemporaryDirectory() as directory:
             transcript = Path(directory) / "transcript.jsonl"
             transcript.write_text("hello", encoding="utf-8")
@@ -82,22 +82,22 @@ class QoderWebTests(unittest.TestCase):
 
             self.assertEqual(
                 fingerprint(str(transcript), "test-model"),
-                "1234.000:5:test-model:v11:ir%s" % IR_VERSION,
+                "1234.000:5:test-model:v12:ir%s" % IR_VERSION,
             )
 
-    def test_v11_fingerprint_invalidates_v10_cached_results(self):
-        # v10 cached results lack the bill + subagent_returns blocks; the
-        # v11 bump must make cache_load miss.
-        v10_fp = "1234.000:5:test-model:v10:ir1.6"
+    def test_v12_fingerprint_invalidates_v11_cached_results(self):
+        # v11 cached results lack the skill_gaps block; the v12 bump must
+        # make cache_load miss.
         v11_fp = "1234.000:5:test-model:v11:ir1.6"
-        result = {"status_line": "stale v10 payload"}
+        v12_fp = "1234.000:5:test-model:v12:ir1.6"
+        result = {"status_line": "stale v11 payload"}
 
         original_cache_dir = web.CACHE_DIR
         web.CACHE_DIR = Path(tempfile.mkdtemp())
         try:
-            cache_store("k", v10_fp, result)
-            self.assertEqual(cache_load("k", v10_fp), result)
-            self.assertIsNone(cache_load("k", v11_fp))
+            cache_store("k", v11_fp, result)
+            self.assertEqual(cache_load("k", v11_fp), result)
+            self.assertIsNone(cache_load("k", v12_fp))
         finally:
             web.CACHE_DIR = original_cache_dir
 
@@ -1419,6 +1419,39 @@ class UploadDiscoveryTests(unittest.TestCase):
             uploaded = by_path[str(uploads / "53e08e97-export.jsonl")]
             self.assertTrue(uploaded["uploaded"])
             self.assertEqual(uploaded["workspace"], "upload")
+
+
+class RunAuditSkillGapTests(unittest.TestCase):
+    def _transcript(self, directory):
+        transcript = Path(directory) / "s.jsonl"
+        transcript.write_text(
+            '{"type": "context.append_loop_event", "event": '
+            '{"type": "tool.call", "toolCallId": "c1", "name": "Read", '
+            '"args": {"path": "a"}}}\n'
+            '{"type": "context.append_loop_event", "event": '
+            '{"type": "tool.result", "toolCallId": "c1", "result": '
+            '{"output": "hello world"}}}\n',
+            encoding="utf-8")
+        return transcript
+
+    def test_result_carries_skill_gap_block(self):
+        with tempfile.TemporaryDirectory() as directory:
+            transcript = self._transcript(directory)
+            original_cache_dir = web.CACHE_DIR
+            web.CACHE_DIR = Path(tempfile.mkdtemp())
+            try:
+                job = web.Job({"path": str(transcript)})
+                web.run_audit(job)
+            finally:
+                web.CACHE_DIR = original_cache_dir
+
+            self.assertEqual(job.status, "done")
+            gap = job.result["skill_gaps"]
+            self.assertEqual(
+                sorted(gap),
+                ["join", "listed_unloaded", "loaded_unused", "missed_triggers",
+                 "notes", "sets", "unjudged"])
+            self.assertIsInstance(gap["join"]["matched"], int)
 
 
 if __name__ == "__main__":

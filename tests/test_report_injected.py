@@ -144,5 +144,80 @@ class CliWiringTests(unittest.TestCase):
         self.assertEqual(render.call_args.kwargs["injected_skills"], {})
 
 
+def gap_block():
+    return {
+        "join": {"matched": 1,
+                 "ir_only": [{"skill_id": "ghost", "name": "ghost",
+                              "listed": 3, "loaded": 0, "executed": 0}],
+                 "catalog_only": 5},
+        "sets": {"listed": 2, "loaded": 1, "executed": 1},
+        "listed_unloaded": [
+            {"skill_id": "ghost", "name": "ghost", "description": None,
+             "bodies": 0, "stubs": 0}],
+        "missed_triggers": [
+            {"skill_id": "beta", "name": "beta", "turn": 2,
+             "rationale": "session asked for beta",
+             "evidence": "please use beta", "confidence": 0.9}],
+        "loaded_unused": [
+            {"skill_id": "alpha", "name": "alpha",
+             "description": "Use when testing.", "bodies": 1, "stubs": 1}],
+        "unjudged": {"count": 0, "prefiltered": 0, "over_limit": 0,
+                     "judge_errors": 0, "judge_unconfigured": False},
+        "notes": [],
+    }
+
+
+class SkillGapSectionTests(unittest.TestCase):
+    def render_with_gap(self, gap):
+        with tempfile.TemporaryDirectory() as td:
+            transcript = Path(td) / "t.jsonl"
+            shutil.copy(FIXTURES / "qoder-transcript.jsonl", transcript)
+            session = load_session(transcript)
+            return render_report(
+                session, build_timeline(session), [],
+                judge_enabled=True, catalog_size=6, gap=gap)
+
+    def test_section_renders_missed_triggers_with_evidence(self):
+        html = self.render_with_gap(gap_block())
+        self.assertIn("Skill GAP", html)
+        self.assertIn("missed triggers", html)
+        self.assertIn("please use beta", html)
+        self.assertIn("beta", html)
+
+    def test_section_renders_loaded_unused_with_declared_use(self):
+        html = self.render_with_gap(gap_block())
+        self.assertIn("loaded but never executed", html)
+        self.assertIn("Use when testing.", html)
+
+    def test_section_renders_ir_only_table(self):
+        html = self.render_with_gap(gap_block())
+        self.assertIn("IR-only (no catalog entry)", html)
+        self.assertIn("ghost", html)
+
+    def test_missed_trigger_turn_is_escaped(self):
+        gap = gap_block()
+        gap["missed_triggers"] = [
+            {"skill_id": "beta", "name": "beta",
+             "turn": "<img src=x onerror=alert(1)>",
+             "rationale": "r", "evidence": "e", "confidence": 0.9}]
+        html = self.render_with_gap(gap)
+        self.assertNotIn("<img src=x", html)
+        self.assertIn("&lt;img", html)
+
+    def test_missed_trigger_turn_none_renders_dash(self):
+        gap = gap_block()
+        for m in gap["missed_triggers"]:
+            m["turn"] = None
+        html = self.render_with_gap(gap)
+        self.assertIn("&mdash;", html)
+
+    def test_judge_off_notice_when_unconfigured(self):
+        gap = gap_block()
+        gap["unjudged"]["judge_unconfigured"] = True
+        gap["missed_triggers"] = []
+        html = self.render_with_gap(gap)
+        self.assertIn("trigger GAPs not evaluated", html)
+
+
 if __name__ == "__main__":
     unittest.main()

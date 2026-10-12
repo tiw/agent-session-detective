@@ -20,6 +20,7 @@ from .catalog import load_catalog, load_injected, merge_catalog
 from .ide_db import attach_ide_db, suggest_ide_db_hint
 from .if_eval import IFResult, evaluate_playbook
 from .ir import build_analyses, build_audit_document
+from .ir.gap import gap_candidates, skill_gaps
 from .ir.library import library_report
 from .judge import Judge, judge_session
 from .report import render_report
@@ -205,15 +206,23 @@ def main(argv=None) -> int:
         analyses["library"] = library
         _write_json(Path(args.ir_analyses), analyses)
 
+    candidate_pairs, gap_stats = gap_candidates(
+        document.skills, document.items, catalog)
     judge = None if args.no_judge else Judge.from_env()
     judgments = []
     if judge:
-        unconsumed = max(len(catalog) - len(timeline.consumed_skill_names()), 0)
-        n = min(args.judge_limit, unconsumed) if args.judge_limit is not None else unconsumed
-        print("Judging %d unconsumed skills (model: %s)..." % (n, judge.model), file=sys.stderr)
-        judgments = judge_session(timeline, catalog, judge, limit=args.judge_limit)
+        n = (min(args.judge_limit, len(candidate_pairs))
+             if args.judge_limit is not None else len(candidate_pairs))
+        print("Judging %d gap candidates (model: %s)..." % (n, judge.model),
+              file=sys.stderr)
+        judgments = judge_session(
+            timeline, [skill for _, skill in candidate_pairs], judge,
+            limit=n)
     else:
         print("Judge not configured; facts only. See ASD_JUDGE_* env vars.", file=sys.stderr)
+    gap = skill_gaps(
+        document.skills, catalog, judgments, stats=gap_stats,
+        judge_configured=judge is not None)
 
     if_results = []
     if args.steps:
@@ -263,6 +272,7 @@ def main(argv=None) -> int:
         no_self_invoke={s.name.lower() for s in catalog if s.disable_model_invocation},
         document=document,
         injected_skills={s.name: s for s in injected},
+        gap=gap,
     )
     out_path = Path(args.out) if args.out else _default_output_path(session_source)
     out_path.write_text(report, encoding="utf-8")

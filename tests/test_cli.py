@@ -540,5 +540,24 @@ class IdeDbFlagTests(unittest.TestCase):
                                  for n in document.coverage.notes))
 
 
+class SkillGapWiringTests(unittest.TestCase):
+    def test_cli_passes_skill_gap_block_to_report(self):
+        with tempfile.TemporaryDirectory() as directory:
+            transcript = Path(directory) / "foo.jsonl"
+            shutil.copy(FIXTURES / "qoder-transcript.jsonl", transcript)
+
+            with patch("agent_session_detective.cli.render_report",
+                       return_value="<html>report</html>") as render:
+                exit_code = cli.main([str(transcript), "--no-judge"])
+
+            self.assertEqual(exit_code, 0)
+            gap = render.call_args.kwargs["gap"]
+            self.assertEqual(
+                sorted(gap),
+                ["join", "listed_unloaded", "loaded_unused", "missed_triggers",
+                 "notes", "sets", "unjudged"])
+            self.assertTrue(gap["unjudged"]["judge_unconfigured"])
+
+
 if __name__ == "__main__":
     unittest.main()

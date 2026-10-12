@@ -1,0 +1,229 @@
+# src/agent_session_detective/ir/gap.py
+"""Skill GAP analysis: catalog expectations × IR actual observations.
+
+Three sources meet here, each keeping its own epistemic status:
+
+- IR state (``SkillEntity`` + ``ContentItem``): what the session actually
+  did — listings, bodies, stubs, executions per skill id.
+- ``catalog`` (disk SKILL.md): what each skill declares — the trigger
+  wording an agent sees when deciding to load it.
+- ``judgments``: counterfactual trigger verdicts about never-loaded
+  candidates. LLM output, carried with verbatim evidence or discarded.
+
+The join key is the casefolded skill name across IR skill ids (plus
+identity-merge aliases) and catalog names. Join failures are findings,
+not guesses: they are listed as ``ir_only``, never renamed to match.
+"""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Dict, List, Optional, Sequence, Tuple
+
+from ..catalog import Skill
+from .schema import ContentItem, SkillEntity
+
+if TYPE_CHECKING:
+    from ..judge import Judgment
+
+
+def _counts(skills: Sequence[SkillEntity]) -> Dict[str, dict]:
+    """Per skill id: listed / bodies / stubs / executions and listing cost."""
+    out: Dict[str, dict] = {}
+    for skill in skills:
+        entry = out.setdefault(skill.skill_id, {
+            "skill_id": skill.skill_id,
+            "name": skill.name,
+            "aliases": list(skill.aliases),
+            "listed": 0,
+            "bodies": 0,
+            "stubs": 0,
+            "executed": 0,
+        })
+        for obs in skill.observations:
+            if obs.kind == "listing":
+                entry["listed"] += 1
+            elif obs.kind == "body":
+                entry["bodies"] += 1
+            elif obs.kind == "stub":
+                entry["stubs"] += 1
+            elif obs.kind == "execution":
+                entry["executed"] += 1
+        entry["loaded"] = entry["bodies"] + entry["stubs"]
+    return out
+
+
+def _join_keys(entry: dict) -> List[str]:
+    """Casefolded identity keys for one IR entry; empty keys never match."""
+    keys = [entry["skill_id"].casefold()]
+    keys.extend(alias.casefold() for alias in entry["aliases"])
+    return [key for key in keys if key]
+
+
+def _join(counts: Dict[str, dict],
+          catalog: Sequence[Skill]) -> Tuple[Dict[str, Skill], List[dict], int]:
+    """Match IR ids (+aliases) against catalog names, casefolded.
+
+    Returns ``(matched: skill_id -> Skill, ir_only rows, catalog_only count)``.
+    """
+    by_name: Dict[str, Skill] = {}
+    for skill in catalog:
+        by_name.setdefault(skill.name.casefold(), skill)
+    matched: Dict[str, Skill] = {}
+    ir_only: List[dict] = []
+    for skill_id, entry in counts.items():
+        keys = _join_keys(entry)
+        hit = next((by_name[k] for k in keys if k in by_name), None)
+        if hit is None:
+            ir_only.append({
+                "skill_id": skill_id,
+                "name": entry["name"],
+                "listed": entry["listed"],
+                "loaded": entry["loaded"],
+                "executed": entry["executed"],
+            })
+        else:
+            matched[skill_id] = hit
+    matched_catalog_names = {s.name.casefold() for s in matched.values()}
+    catalog_only = len(by_name) - len(matched_catalog_names)
+    return matched, sorted(ir_only, key=lambda row: row["skill_id"]), catalog_only
+
+
+def _describe(counts: Dict[str, dict], matched: Dict[str, Skill],
+              skill_id: str) -> dict:
+    entry = counts[skill_id]
+    catalog_skill = matched.get(skill_id)
+    return {
+        "skill_id": skill_id,
+        "name": entry["name"],
+        "description": catalog_skill.description if catalog_skill else None,
+        "bodies": entry["bodies"],
+        "stubs": entry["stubs"],
+    }
+
+
+def skill_gaps(skills: Sequence[SkillEntity], catalog: Sequence[Skill],
+               judgments: Sequence[Judgment], stats: Optional[dict] = None,
+               judge_configured: bool = True) -> dict:
+    """The GAP block: join health, candidate pool, verdicts, leftovers.
+
+    ``stats`` is the dict returned by ``gap_candidates`` for the same
+    inputs; when absent, unjudged accounting degrades to counts only.
+    """
+    counts = _counts(skills)
+    matched, ir_only, catalog_only = _join(counts, catalog)
+    listed_unloaded = sorted(
+        skill_id for skill_id, e in counts.items()
+        if e["listed"] and not e["loaded"] and not e["executed"])
+    loaded_unused = sorted(
+        skill_id for skill_id, e in counts.items()
+        if e["bodies"] and not e["executed"])
+
+    id_by_catalog_name: Dict[str, str] = {}
+    for skill_id, catalog_skill in matched.items():
+        id_by_catalog_name[catalog_skill.name.lower()] = skill_id
+
+    missed = []
+    judge_errors = 0
+    for j in judgments:
+        if j.error:
+            judge_errors += 1
+        elif j.triggered:
+            missed.append({
+                "skill_id": id_by_catalog_name.get(j.skill_name.lower()),
+                "name": j.skill_name,
+                "turn": j.turn,
+                "rationale": j.rationale,
+                "evidence": j.evidence,
+                "confidence": j.confidence,
+            })
+
+    candidates = stats["candidates"] if stats else 0
+    judged = len(judgments)
+    # over_limit is truncation only (judge ran but stopped early): the
+    # candidates the judge never reached. Defect rows are counted once, in
+    # judge_errors — never here too. A floor of 0 keeps stray surplus
+    # judgments from producing negative counts.
+    over_limit = max(0, candidates - judged) if stats else 0
+    prefiltered = stats["prefiltered"] if stats else 0
+    if stats and not judge_configured:
+        unjudged_count = stats["listed_unloaded"]
+    else:
+        unjudged_count = prefiltered + over_limit + judge_errors
+    unjudged = {
+        "count": unjudged_count,
+        "prefiltered": prefiltered,
+        "over_limit": over_limit,
+        "judge_errors": judge_errors,
+        "judge_unconfigured": not judge_configured,
+    }
+
+    notes = []
+    if not judge_configured:
+        notes.append("judge not configured — trigger GAPs not evaluated")
+    if ir_only:
+        notes.append("%d IR skill(s) matched no catalog entry" % len(ir_only))
+    if prefiltered:
+        notes.append(
+            "%d listed-unloaded skill(s) prefiltered (name absent from "
+            "session input, or no catalog wording to judge against)"
+            % prefiltered)
+
+    return {
+        "join": {"matched": len(matched), "ir_only": ir_only,
+                 "catalog_only": catalog_only},
+        "sets": {
+            "listed": sum(1 for e in counts.values() if e["listed"]),
+            "loaded": sum(1 for e in counts.values() if e["loaded"]),
+            "executed": sum(1 for e in counts.values() if e["executed"]),
+        },
+        "listed_unloaded": [
+            _describe(counts, matched, s) for s in listed_unloaded],
+        "missed_triggers": missed,
+        "loaded_unused": [
+            _describe(counts, matched, s) for s in loaded_unused],
+        "unjudged": unjudged,
+        "notes": notes,
+    }
+
+
+def _session_text(items: Sequence[ContentItem]) -> str:
+    """The session's typed human input, casefolded for name matching."""
+    return "\n".join(
+        item.human_text for item in items if item.human_text).casefold()
+
+
+def gap_candidates(skills: Sequence[SkillEntity],
+                   items: Sequence[ContentItem],
+                   catalog: Sequence[Skill],
+                   ) -> Tuple[List[Tuple[str, Skill]], dict]:
+    """Listed-but-never-loaded skills whose name the session mentioned.
+
+    The prefilter is deliberately cheap and legible: a candidate must have
+    been offered to the agent (a listing), must never have loaded (no
+    body/stub/execution), and its name or an alias must appear in the
+    session's typed human input. Skills that fail the name test are
+    counted in ``prefiltered`` — never silently dropped.
+    """
+    counts = _counts(skills)
+    matched, _, _ = _join(counts, catalog)
+    text = _session_text(items)
+    pairs: List[Tuple[str, Skill]] = []
+    prefiltered = 0
+    listed_unloaded = 0
+    for skill_id in sorted(counts):
+        entry = counts[skill_id]
+        if not entry["listed"] or entry["loaded"] or entry["executed"]:
+            continue
+        listed_unloaded += 1
+        catalog_skill = matched.get(skill_id)
+        if catalog_skill is None:
+            prefiltered += 1
+            continue
+        keys = _join_keys(entry)
+        if not any(k in text for k in keys):
+            prefiltered += 1
+            continue
+        pairs.append((skill_id, catalog_skill))
+    stats = {"listed_unloaded": listed_unloaded, "candidates": len(pairs),
+             "prefiltered": prefiltered}
+    return pairs, stats
