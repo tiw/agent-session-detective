@@ -764,6 +764,22 @@ def _injected_for(params: dict) -> List:
     return []
 
 
+def injected_skills_payload(params: dict) -> List[dict]:
+    """Describe the supplied skills for the result payload.
+
+    Reads through the same ``_injected_for`` the audit uses, so the names the UI
+    marks are exactly the skills that were merged in — including the ones that
+    arrived via ``injected_path`` rather than pasted inline. ``intent`` rides
+    along because the UI shows it, already labelled as a stated purpose rather
+    than an observation.
+    """
+    return [
+        {"name": s.name, "description": s.description, "intent": s.intent,
+         "source": str(s.path)}
+        for s in _injected_for(params)
+    ]
+
+
 def run_audit(job: Job) -> None:
     job.status = "running"
     job.started_at = time.time()
@@ -880,6 +896,9 @@ def run_audit(job: Job) -> None:
             "catalog_size": len(catalog),
             "catalog_dirs": [str(d) for d in skill_dirs],
             "injected_count": len(injected),
+            # Supplied skill text, named so the UI can mark those skills apart
+            # from the ones the scanner found.
+            "injected_skills": injected_skills_payload(job.params),
             "status_line": status_line,
             "suggestions": suggest_next_steps(
                 timeline, expectations, judgments, if_results, judge_enabled, token_stats

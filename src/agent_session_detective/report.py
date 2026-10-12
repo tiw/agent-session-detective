@@ -38,6 +38,10 @@ main { max-width:960px; margin:0 auto; padding:8px 36px 64px; }
 .badge.infer { color:var(--warn); border-color:var(--warn); }
 .badge.missed { color:var(--bad); border-color:var(--bad); }
 .badge.ok { color:var(--ok); border-color:var(--ok); }
+/* supplied text: a person handed us this skill's wording. It is real text with
+   a real origin, not something the log recorded — so it is neither "fact"
+   (the log never saw it) nor "missed" (nothing is wrong with it). */
+.badge.injected { color:var(--inject); border-color:var(--inject); }
 details { border:1px solid var(--line); border-radius:8px; margin:8px 0; }
 summary { cursor:pointer; padding:10px 14px; font-weight:600; }
 details[open] summary { border-bottom:1px solid var(--line); }
@@ -298,6 +302,7 @@ def render_report(
     token_stats: Optional[TokenStats] = None,
     no_self_invoke: Optional[set] = None,
     document: Optional["AuditDocument"] = None,
+    injected_skills: Optional[dict] = None,
 ) -> str:
     if_results = if_results or []
     missed = [j for j in judgments if j.triggered]
@@ -306,6 +311,24 @@ def render_report(
 
     loaded_lower = {n.lower() for n in timeline.skill_names()}
     read_lower = {f.skill_name.lower() for f in timeline.file_reads}
+
+    # name (lower) -> entry, for skills whose text was supplied from outside.
+    # Rendered apart from scanned ones so supplied wording is never read as
+    # something the log recorded.
+    injected = {name.lower(): skill for name, skill in (injected_skills or {}).items()}
+    injected_lower = set(injected)
+
+    def injected_badge(name: str) -> str:
+        entry = injected.get(name.lower())
+        if entry is None:
+            return ""
+        return (
+            "<span class='badge injected' title='%s'>supplied text</span>"
+            % esc(
+                "Skill wording supplied by the auditor, not parsed from a "
+                "scanned SKILL.md. The session log never recorded it."
+            )
+        )
 
     parts = [
         "<!DOCTYPE html><html lang='zh'><head><meta charset='utf-8'>",
@@ -326,6 +349,48 @@ def render_report(
         "</div></header><main>",
     ]
 
+    # --- Supplied skill text ---
+    # Its own section, above the findings, because it changes how every name
+    # below should be read: a finding about an injected skill is a finding
+    # about our own input as much as about the session.
+    if injected:
+        parts.append("<h2>Supplied Skill Text</h2>")
+        parts.append(
+            "<div class='notice'>%d skill(s) below were audited against wording "
+            "supplied by the auditor rather than parsed from a scanned SKILL.md. "
+            "The text is real and has a stated origin, but <strong>the session "
+            "log never recorded it</strong> — a finding on one of these is a "
+            "finding about the supplied text as much as about the session. "
+            "Nothing below may be read as evidence the agent saw this wording.</div>"
+            % len(injected)
+        )
+        parts.append(
+            "<table><tr><th>skill</th><th>source</th><th>description</th>"
+            "<th>stated purpose</th></tr>"
+        )
+        for name in sorted(injected, key=str.lower):
+            skill = injected[name]
+            source = esc(str(skill.path)) if skill.path else "&mdash;"
+            # intent is a person's statement, never a log fact, so it is
+            # labeled as such in its own column rather than presented as one.
+            purpose = (
+                "<span class='badge infer'>stated, not observed</span> %s"
+                % esc(skill.intent)
+                if skill.intent else "<span class='meta'>none supplied</span>"
+            )
+            description = esc(skill.description) or "<span class='meta'>(empty)</span>"
+            parts.append(
+                "<tr><td>%s%s</td><td class='meta'>%s</td><td>%s</td><td>%s</td></tr>"
+                % (
+                    esc(skill.name),
+                    injected_badge(skill.name),
+                    source,
+                    description,
+                    purpose,
+                )
+            )
+        parts.append("</table>")
+
     # --- Expectations checklist ---
     if expected:
         parts.append("<h2>Expectations</h2>")
@@ -338,7 +403,10 @@ def render_report(
                 status = '<span class="badge infer">file-read only</span>'
             else:
                 status = '<span class="badge missed">MISSING</span>'
-            parts.append("<tr><td>%s</td><td>%s</td></tr>" % (esc(name), status))
+            parts.append(
+                "<tr><td>%s%s</td><td>%s</td></tr>"
+                % (esc(name), injected_badge(name), status)
+            )
         parts.append("</table>")
 
     # --- Findings ---
@@ -350,11 +418,23 @@ def render_report(
         )
     elif missed:
         for j in missed:
-            parts.append(
-                "<details><summary><span class='badge missed'>missed trigger</span> %s "
-                "<span class='meta'>turn %s · confidence %.2f</span></summary><div class='body'>"
-                % (esc(j.skill_name), esc(j.turn), j.confidence)
+            # The verdict says "should have loaded", which is only as sound as
+            # the wording it was judged against. When that wording was supplied
+            # rather than scanned, the finding has to carry that caveat with it.
+            caveat = (
+                "<div class='notice'>This verdict was reached against "
+                "<strong>supplied</strong> skill wording, not wording parsed from "
+                "a scanned SKILL.md. It shows the session does not match the text "
+                "above — it does not show what the harness offered the agent.</div>"
+                if j.skill_name.lower() in injected_lower else ""
             )
+            parts.append(
+                "<details><summary><span class='badge missed'>missed trigger</span> %s%s "
+                "<span class='meta'>turn %s · confidence %.2f</span></summary><div class='body'>"
+                % (esc(j.skill_name), injected_badge(j.skill_name),
+                   esc(j.turn), j.confidence)
+            )
+            parts.append(caveat)
             parts.append("<p>%s</p>" % esc(j.rationale))
             if j.evidence:
                 parts.append("<blockquote>%s</blockquote>" % esc(j.evidence))
@@ -416,9 +496,10 @@ def render_report(
         for read in timeline.file_reads:
             origin = "" if read.origin == "main" else '<span class="badge">%s</span>' % esc(read.origin)
             parts.append(
-                "<details><summary><span class='badge infer'>file read</span> %s %s "
+                "<details><summary><span class='badge infer'>file read</span> %s%s %s "
                 "<span class='meta'>%s · %s</span></summary><div class='body'>"
-                % (esc(read.skill_name), origin, fmt_ts(read.ts), esc(read.path))
+                % (esc(read.skill_name), injected_badge(read.skill_name), origin,
+                   fmt_ts(read.ts), esc(read.path))
             )
             if read.snippet:
                 parts.append("<pre>%s</pre>" % esc(read.snippet[:2000]))
@@ -451,10 +532,11 @@ def render_report(
         # never a stub-derived cost. Load costs render only in the
         # evidence-backed section below, labeled EST or "unavailable".
         parts.append(
-            "<details><summary><span class='badge fact'>loaded</span> %s %s%s "
+            "<details><summary><span class='badge fact'>loaded</span> %s%s %s%s "
             "<span class='meta'>%s · load marker</span></summary><div class='body'>"
             % (
-                esc(load.skill_name), origin, eviction, fmt_ts(load.ts),
+                esc(load.skill_name), injected_badge(load.skill_name), origin,
+                eviction, fmt_ts(load.ts),
             )
         )
         ctx = (

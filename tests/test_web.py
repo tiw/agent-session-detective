@@ -1048,5 +1048,45 @@ class CatalogAuditEndpointTests(unittest.TestCase):
             web.run_catalog_audit(["not", "a", "dict"])
 
 
+class InjectedDisclosurePayloadTests(unittest.TestCase):
+    """The result payload has to name the supplied skills.
+
+    The web UI marks them from this list, so an entry that lost its
+    ``source`` or ``intent`` here would render as ordinary catalog data.
+    """
+
+    def test_payload_names_every_supplied_skill(self):
+        payload = web.injected_skills_payload({"injected": json.dumps({
+            "library": {"description": "Supplied routing text.",
+                        "intent": "资料库统一入口"},
+            "cloud-service": {"description": "Backend for sites."},
+        })})
+        self.assertEqual(sorted(s["name"] for s in payload),
+                         ["cloud-service", "library"])
+        by_name = {s["name"]: s for s in payload}
+        self.assertEqual(by_name["library"]["intent"], "资料库统一入口")
+        self.assertIsNone(by_name["cloud-service"]["intent"])
+        for entry in payload:
+            self.assertEqual(entry["source"], "<injected>")
+
+    def test_payload_follows_the_injected_path_route_too(self):
+        # Reading the payload from a different source than the audit merged
+        # would mark a skill the audit never saw, or miss one it did.
+        with tempfile.TemporaryDirectory() as directory:
+            truth = Path(directory) / "truth.json"
+            truth.write_text(json.dumps({
+                "library": {"description": "From a file."}}), "utf-8")
+            payload = web.injected_skills_payload(
+                {"injected_path": str(truth)})
+        self.assertEqual([s["name"] for s in payload], ["library"])
+
+    def test_malformed_payload_yields_nothing_rather_than_raising(self):
+        self.assertEqual(
+            web.injected_skills_payload({"injected": "{not json"}), [])
+
+    def test_absent_payload_yields_nothing(self):
+        self.assertEqual(web.injected_skills_payload({}), [])
+
+
 if __name__ == "__main__":
     unittest.main()

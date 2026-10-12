@@ -990,10 +990,40 @@
       );
     }
 
+    // Supplied skill text, named before any finding that depends on it.
+    var injectedList = r.injected_skills || [];
+    var injectedNames = {};
+    injectedList.forEach(function (s) { injectedNames[(s.name || "").toLowerCase()] = true; });
+    function injectedMark(name) {
+      if (!injectedNames[(name || "").toLowerCase()]) return "";
+      return " " + badge("inject", "supplied") +
+        '<span class="sr-only">：该 skill 原文为人工注入，非日志记录</span>';
+    }
+    if (injectedList.length) {
+      var rows = injectedList.map(function (s) {
+        return "<tr><td>" + esc(s.name) + injectedMark(s.name) + "</td>" +
+          '<td class="dim">' + esc(s.source || "") + "</td>" +
+          "<td>" + esc(s.description || "(空)") + "</td>" +
+          "<td>" + (s.intent
+            ? badge("warn", "stated, not observed") + " " + esc(s.intent)
+            : '<span class="dim">none supplied</span>') + "</td></tr>";
+      }).join("");
+      parts.push(
+        "<section id='injected'><h2>supplied skill text</h2>" +
+        "<div class='injected-notice'>" +
+        injectedList.length + " 个 skill 的原文由审计者提供，而非从扫描到的 SKILL.md 解析。" +
+        "文本是真实的、出处明确，但<strong>会话日志从未记录过它</strong>——" +
+        "对这些 skill 的结论同时是对所提供文本的结论，不能读成 agent 见过这段话。" +
+        "</div>" +
+        "<table><tr><th>skill</th><th>source</th><th>description</th>" +
+        "<th>stated purpose</th></tr>" + rows + "</table></section>"
+      );
+    }
+
     if (r.expectations.length) {
       var rows = r.expectations.map(function (e) {
         var cls = e.status === "loaded" ? "ok" : e.status === "file-read" ? "warn" : "bad";
-        return "<tr><td>" + esc(e.name) + "</td><td>" + badge(cls, e.status) + "</td></tr>";
+        return "<tr><td>" + esc(e.name) + injectedMark(e.name) + "</td><td>" + badge(cls, e.status) + "</td></tr>";
       }).join("");
       parts.push("<section id='expectations'><h2>expectations " + helpDot("expect") + "</h2><table><tr><th>skill</th><th>status</th></tr>" + rows + "</table></section>");
     }
@@ -1002,8 +1032,17 @@
     if (missed.length || r.judge_enabled) {
       var body = missed.length
         ? missed.map(function (j) {
+            // The verdict is only as sound as the wording it was judged
+            // against, so supplied wording has to travel with the finding.
+            var caveat = injectedNames[(j.skill_name || "").toLowerCase()]
+              ? "<div class='injected-notice'>本判定依据的是<strong>人工提供</strong>的 skill 原文，" +
+                "不是从 SKILL.md 解析的文本。它说明会话与上面那段文本不匹配，" +
+                "但不能说明 harness 当时提供了什么。</div>"
+              : "";
             return "<details><summary>" + badge("bad", "missed") + " " + esc(j.skill_name) +
+              injectedMark(j.skill_name) +
               " <span class='dim'>turn " + esc(j.turn) + " · conf " + j.confidence.toFixed(2) + "</span></summary>" +
+              caveat +
               "<p>" + esc(j.rationale) + "</p><blockquote>" + esc(j.evidence) + "</blockquote></details>";
           }).join("")
         : '<p class="dim">no missed triggers among judged skills.</p>';
@@ -1043,12 +1082,14 @@
         // render rule: the lifecycle view has no body evidence, so no cost
         // number is shown here at all (cost lives in the skill loads table)
         return "<details><summary>" + badge("fact", "loaded") + " " + esc(l.skill_name) +
+          injectedMark(l.skill_name) +
           " <span class='dim'>" + esc(fmtTs(l.ts)) +
           (l.evicted_by != null ? " · evicted?" : "") + "</span></summary>" +
           "<pre>" + esc(l.content_head) + "</pre>" + (ns ? "<p>" + ns + "</p>" : "") + "</details>";
       }).join("");
       items += r.timeline.file_reads.map(function (f) {
         return "<details><summary>" + badge("warn", "file-read") + " " + esc(f.skill_name) +
+          injectedMark(f.skill_name) +
           " <span class='dim'>" + esc(f.origin) + "</span></summary><pre>" + esc(f.snippet_head) + "</pre></details>";
       }).join("");
       parts.push("<section><h2>skill lifecycle " + helpDot("lifecycle") + "</h2>" + (items || '<p class="dim">none detected.</p>') + "</section>");

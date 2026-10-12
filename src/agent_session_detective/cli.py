@@ -238,6 +238,7 @@ def main(argv=None) -> int:
         token_stats=token_stats,
         no_self_invoke={s.name.lower() for s in catalog if s.disable_model_invocation},
         document=document,
+        injected_skills={s.name: s for s in injected},
     )
     out_path = Path(args.out) if args.out else _default_output_path(session_source)
     out_path.write_text(report, encoding="utf-8")

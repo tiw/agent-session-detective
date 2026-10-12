@@ -191,6 +191,9 @@ h1 { font-size: 15px; margin: 0; text-transform: lowercase; letter-spacing: 0.08
 .badge.bad { color: var(--bad); border-color: rgba(244, 80, 76, 0.4); }
 .badge.warn { color: var(--warn); border-color: rgba(245, 165, 36, 0.4); }
 .badge.fact { color: var(--fact); border-color: rgba(88, 166, 255, 0.4); }
+/* supplied text: real wording from the auditor, not from the log — neither a
+   pass/fail verdict nor something the session recorded. */
+.badge.inject { color: var(--inject); border-color: rgba(167, 139, 250, 0.4); }
 .badge.dim { color: var(--dim); }
 
 /* audit form */
@@ -548,3 +551,28 @@ blockquote {
 .ok-text { color: var(--ok); }
 .bad-text { color: var(--bad); }
 .catalog-body .tiny { font-size: 11px; margin-top: 16px; }
+
+/* supplied skill text: the caveat has to travel with every finding that
+   depends on it, so it gets its own voice rather than a footnote. */
+.injected-notice {
+  margin: 10px 0;
+  padding: 10px 12px;
+  border: 1px solid rgba(167, 139, 250, 0.4);
+  border-left-width: 3px;
+  border-radius: 8px;
+  background: rgba(167, 139, 250, 0.06);
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--dim);
+}
+.injected-notice strong { color: var(--inject); font-weight: 500; }
+
+.sr-only {
+  position: absolute;
+  width: 1px; height: 1px;
+  padding: 0; margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
