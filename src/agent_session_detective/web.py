@@ -604,6 +604,9 @@ def fleet_stats(roots: Optional[List[str]] = None) -> Dict[str, object]:
     """Cross-session aggregation, on demand: parses every discovered
     session's log, so the caller should treat this as a slow operation
     (the UI shows progress while it runs)."""
+    from .ir.builder import build_audit_document
+    from .ir.process import process_signature
+
     audited = cached_paths()
     fleet: Dict[str, object] = {
         "sessions": 0,
@@ -614,6 +617,7 @@ def fleet_stats(roots: Optional[List[str]] = None) -> Dict[str, object]:
         "total_output_tokens": 0,
         "total_repeat_extra_tokens": 0,
         "repeat_class_totals": {},
+        "process_groups": {},
     }
     turns_sum = 0
     hit_sum = 0.0
@@ -640,8 +644,17 @@ def fleet_stats(roots: Optional[List[str]] = None) -> Dict[str, object]:
             s["cache_hit_rate"] = s["growth_verdict"] = None
             s["repeat_extra_tokens"] = s["output_total"] = None
             s["repeat_class_totals"] = None
+            s["process"] = None
         if s["turns"] is None:
             continue
+        # Signature machinery sits in its own guard: an IR-build failure
+        # degrades only this feature, not the session's other stats.
+        try:
+            document = build_audit_document(
+                session, _ir_adapter_id(session, Path(s["path"])))
+            s["process"] = process_signature(document)
+        except Exception:
+            s["process"] = None
         fleet["sessions"] = fleet["sessions"] + 1
         turns_sum += s["turns"]
         shape = (s["growth_verdict"] or "unknown").split(" ")[0]
@@ -654,10 +667,51 @@ def fleet_stats(roots: Optional[List[str]] = None) -> Dict[str, object]:
         for cls, extra in (s["repeat_class_totals"] or {}).items():
             fleet["repeat_class_totals"][cls] = \
                 fleet["repeat_class_totals"].get(cls, 0) + extra
+        sig = s["process"]
+        if sig:
+            group = fleet["process_groups"].setdefault(sig["style"], {
+                "sessions": 0, "turns_sum": 0, "avg_turns": None,
+                "with_usage": 0, "hit_sum": 0.0,
+                "avg_cache_hit_rate": None, "total_output_tokens": 0,
+                "total_repeat_extra_tokens": 0, "repeat_class_totals": {},
+                "total_listing_reinject_tokens_est": 0,
+                "total_ceremony_tokens_est": 0, "total_compactions": 0,
+                "interventions_signal_sum": 0,
+                "avg_interventions_signal": None})
+            group["sessions"] += 1
+            group["turns_sum"] += s["turns"]
+            if s["cache_hit_rate"] is not None:
+                group["with_usage"] += 1
+                group["hit_sum"] += s["cache_hit_rate"]
+            group["total_output_tokens"] += s["output_total"] or 0
+            group["total_repeat_extra_tokens"] += \
+                s["repeat_extra_tokens"] or 0
+            for cls, extra in (s["repeat_class_totals"] or {}).items():
+                group["repeat_class_totals"][cls] = \
+                    group["repeat_class_totals"].get(cls, 0) + extra
+            listing_extra = sig["listing"]["reinject_tokens_est"]
+            protocol = (s["repeat_class_totals"] or {}) \
+                .get("post_compaction") or 0
+            group["total_listing_reinject_tokens_est"] += listing_extra
+            group["total_ceremony_tokens_est"] += listing_extra + protocol
+            group["total_compactions"] += len(stats.compaction_points)
+            group["interventions_signal_sum"] += \
+                sig["interventions"]["signal"]
     if fleet["sessions"]:
         fleet["avg_turns"] = round(turns_sum / fleet["sessions"], 1)
     if fleet["with_usage"]:
         fleet["avg_cache_hit_rate"] = round(hit_sum / fleet["with_usage"], 3)
+    for group in fleet["process_groups"].values():
+        if group["sessions"]:
+            group["avg_turns"] = round(
+                group["turns_sum"] / group["sessions"], 1)
+            group["avg_interventions_signal"] = round(
+                group["interventions_signal_sum"] / group["sessions"], 1)
+        if group["with_usage"]:
+            group["avg_cache_hit_rate"] = round(
+                group["hit_sum"] / group["with_usage"], 3)
+        del group["turns_sum"], group["hit_sum"], \
+            group["interventions_signal_sum"]
     return fleet
 
 
@@ -945,8 +999,10 @@ def run_audit(job: Job) -> None:
         from .ir.builder import build_audit_document
         from .ir.gap import gap_candidates, skill_gaps
         from .ir.library import library_report
+        from .ir.process import process_signature
         adapter_id = _ir_adapter_id(session, source_path)
         document = build_audit_document(session, adapter_id)
+        process_block = process_signature(document)
         # The declared-vs-observed diff needs the loaded catalog, so it is
         # assembled here — build_analyses stays document-pure.
         declared = {skill.name: skill.requires for skill in catalog}
@@ -1011,7 +1067,8 @@ def run_audit(job: Job) -> None:
         bill = build_bill(
             token_stats_block, load_block, returns_block, expectations,
             judgments_block, if_block, billed_series,
-            len(timeline.file_reads), adapter_id, judge_enabled)
+            len(timeline.file_reads), adapter_id, judge_enabled,
+            process=process_block)
         status_line = "%d loaded, %d file-read, %d missed triggers, IF %s, loads %d (%d costed, %d unavailable), reloads %d" % (
             len(timeline.loads),
             len(timeline.file_reads),
@@ -1041,6 +1098,7 @@ def run_audit(job: Job) -> None:
             "subagent_returns": returns_block,
             "library": library_block,
             "skill_gaps": gap_block,
+            "process": process_block,
             "no_self_invoke": sorted(
                 s.name for s in catalog if s.disable_model_invocation
             ),

@@ -1454,5 +1454,112 @@ class RunAuditSkillGapTests(unittest.TestCase):
             self.assertIsInstance(gap["join"]["matched"], int)
 
 
+PIPELINE_LINES = [
+    {"type": "user", "uuid": "u1", "timestamp": "2026-10-12T08:00:01.000Z",
+     "message": {"content": [{"type": "text", "text": "run the change"}]}},
+    {"type": "attachment", "timestamp": "2026-10-12T08:00:02.000Z",
+     "attachment": {"type": "skill_listing",
+                    "content": "- alpha: Use when testing.\n"
+                               "- beta: Use when billing.\n"}},
+    {"type": "assistant", "uuid": "a1",
+     "timestamp": "2026-10-12T08:00:03.000Z",
+     "message": {"content": [
+         {"type": "tool_use", "id": "t1", "name": "Skill",
+          "input": {"skill": "alpha"}}]}},
+    {"type": "user", "uuid": "r1", "timestamp": "2026-10-12T08:00:04.000Z",
+     "message": {"content": [{"type": "tool_result", "tool_use_id": "t1",
+                              "content": "Launching skill: alpha"}]}},
+    {"type": "attachment", "timestamp": "2026-10-12T08:00:05.000Z",
+     "attachment": {"type": "invoked_skills",
+                    "skills": [{"name": "alpha",
+                                "content": "alpha body text here"}]}},
+    {"type": "assistant", "uuid": "a2",
+     "timestamp": "2026-10-12T08:00:06.000Z",
+     "message": {"content": [
+         {"type": "tool_use", "id": "t2", "name": "Read",
+          "input": {"file_path": "/ws/.changes/demo/progress.md"}}]}},
+    {"type": "user", "uuid": "r2", "timestamp": "2026-10-12T08:00:07.000Z",
+     "message": {"content": [{"type": "tool_result", "tool_use_id": "t2",
+                              "content": "current step 3"}]}},
+    {"type": "attachment", "timestamp": "2026-10-12T08:00:08.000Z",
+     "attachment": {"type": "skill_listing",
+                    "content": "- alpha: Use when testing.\n"
+                               "- beta: Use when billing.\n"}},
+]
+
+DIRECT_LINES = [
+    {"type": "user", "uuid": "u1", "timestamp": "2026-10-12T08:00:01.000Z",
+     "message": {"content": [{"type": "text", "text": "quick question"}]}},
+    {"type": "assistant", "uuid": "a1",
+     "timestamp": "2026-10-12T08:00:02.000Z",
+     "message": {"content": [{"type": "text", "text": "answer"}]}},
+]
+
+
+class RunAuditProcessTests(unittest.TestCase):
+    def setUp(self):
+        isolate_uploads(self)
+
+    def test_result_carries_process_block_and_ceremony_row(self):
+        with tempfile.TemporaryDirectory() as directory:
+            transcript = Path(directory) / "s.jsonl"
+            transcript.write_text(
+                "\n".join(json.dumps(line) for line in PIPELINE_LINES),
+                encoding="utf-8")
+            original_cache_dir = web.CACHE_DIR
+            web.CACHE_DIR = Path(tempfile.mkdtemp())
+            try:
+                job = web.Job({"path": str(transcript)})
+                web.run_audit(job)
+            finally:
+                web.CACHE_DIR = original_cache_dir
+
+            self.assertEqual(job.status, "done")
+            process = job.result["process"]
+            self.assertEqual(process["style"], "pipeline")
+            self.assertEqual(process["workflow"], {"reads": 1, "writes": 0})
+            # two listing attachments, each offering both skills
+            self.assertEqual(process["listing"]["occurrences"], 4)
+            self.assertEqual(process["listing"]["reinject_occurrences"], 2)
+            self.assertGreater(
+                process["listing"]["reinject_tokens_est"], 0)
+            self.assertEqual(
+                sorted(process),
+                ["inject", "interventions", "listing", "notes",
+                 "skill_loads", "style", "workflow"])
+            keys = {row["key"] for row in job.result["bill"]["cost_rows"]}
+            self.assertIn("ceremony", keys)
+
+
+class FleetProcessGroupsTests(unittest.TestCase):
+    def setUp(self):
+        isolate_uploads(self)
+
+    def test_sessions_group_by_style_with_ceremony_totals(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            workspace = base / "ws"
+            workspace.mkdir()
+            (workspace / ("a" * 8 + "-1111-1111-1111-111111111111.jsonl")
+             ).write_text(
+                "\n".join(json.dumps(line) for line in PIPELINE_LINES),
+                encoding="utf-8")
+            (workspace / ("b" * 8 + "-2222-2222-2222-222222222222.jsonl")
+             ).write_text(
+                "\n".join(json.dumps(line) for line in DIRECT_LINES),
+                encoding="utf-8")
+            fleet = web.fleet_stats([str(base)])
+
+        groups = fleet["process_groups"]
+        self.assertEqual(sorted(groups), ["direct", "pipeline"])
+        self.assertEqual(groups["pipeline"]["sessions"], 1)
+        self.assertEqual(groups["direct"]["sessions"], 1)
+        self.assertGreater(
+            groups["pipeline"]["total_listing_reinject_tokens_est"], 0)
+        self.assertEqual(
+            groups["direct"]["total_listing_reinject_tokens_est"], 0)
+        self.assertGreaterEqual(groups["pipeline"]["avg_turns"], 1)
+
+
 if __name__ == "__main__":
     unittest.main()
