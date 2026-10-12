@@ -191,3 +191,18 @@ timestamp(int)}` —— contextWindow 可为 null（实测值 128k/200k/272k）�
   FACT/EST 口径。
 - 本页数字是 2026-10-08/09 的实测快照，用于说明形状与量级，不是不变量；
   复测时更新数字与日期。
+
+## 单文件合并形（2026-10-12 实测，导出 transcript）
+
+另一台机器的 v1.1.62 运行时写出第三种布局：**sidechain 记录内联在主
+transcript 里**，不拆 `subagents/*.jsonl`。实测样本 4456 行 / 91% 为
+sidechain 记录：
+
+- join key 为 **snake_case `parent_tool_use_id`**（多文件形写 camelCase
+  `parentToolUseId` 在子代理文件记录上）；同文件还有 `agentId`
+  （`aauxpca-<type>-<hash>` 形，内嵌 subagent_type 佐证）
+- 无 `system/compact_boundary`、无 `attachment` 记录（样本中均 0 条），
+  usage/anchor 遥测完整（1024/1024 requests 带 FACT）
+- 代理归因走 parentUuid 链（`sidechain:<root-uuid>`）；ASD wire 层自
+  IR 1.8 起双 casing 读取 join key，dispatch join 与 returns 台账对
+  `sidechain:` 代理生效

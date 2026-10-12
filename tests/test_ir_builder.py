@@ -260,7 +260,7 @@ class Tier1GoldenTest(unittest.TestCase):
                 "qoder: prefix_hashes are not exposed by the transcript; left null",
             ],
         )
-        self.assertEqual(document.ir_version, "1.7")
+        self.assertEqual(document.ir_version, "1.8")
         self.assertEqual(document.adapter, {"id": "qoder", "version": "1.0"})
         self.assertEqual(document.estimator_version, "cjk-1.0")
         self.assertEqual(
@@ -570,9 +570,12 @@ class InterventionWiringTest(unittest.TestCase):
         self.assertEqual(by_id["main:7:0"].kind, "compact_summary")
         self.assertEqual(by_id["main:9:0"].kind, "skill_body")
         sidechain_item = by_id["sidechain:s1:11:0"]
+        # IR 1.8: sidechain agents enter the dispatch loop, so their first
+        # user record is a machine-authored dispatch brief (D3), not a
+        # plain user message — and never an intervention.
         self.assertEqual(
             (sidechain_item.agent_id, sidechain_item.bucket, sidechain_item.kind),
-            ("sidechain:s1", "user", "user_message"),
+            ("sidechain:s1", "inject", "dispatch_brief"),
         )
         self.assertEqual(
             sorted(iv.item_id for iv in document.interventions),

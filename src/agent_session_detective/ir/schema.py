@@ -12,7 +12,12 @@ from typing import Dict, List, Optional, Tuple
 
 from .. import __version__ as ASD_VERSION
 
-IR_VERSION = "1.7"
+# IR 1.8: inline-sidechain dispatches join in-band (snake_case
+# parent_tool_use_id + sidechain: agent classification), so dispatch rows
+# that previously rendered as orphans now carry subagent_agent_id and the
+# returns ledger counts their process tokens. Cached web results must
+# recompute (fingerprint embeds ir<IR_VERSION>).
+IR_VERSION = "1.8"
 
 BUCKETS: Tuple[str, ...] = (
     "system",
