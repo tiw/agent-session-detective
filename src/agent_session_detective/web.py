@@ -134,7 +134,9 @@ def fingerprint(session_path: str, judge_model: str) -> str:
     # rows and would keep rendering the "no context telemetry" gap note.
     # v11 adds the bill + subagent_returns payload blocks (P0-1): v10
     # cached results would render without the bill card.
-    return "%.3f:%d:%s:v11:ir%s" % (newest, total, judge_model, IR_VERSION)
+    # v12 adds the skill_gaps payload block (skill gap analysis): v11
+    # cached results would render the GAP panel empty.
+    return "%.3f:%d:%s:v12:ir%s" % (newest, total, judge_model, IR_VERSION)
 
 
 def cache_load(key: str, fp: str) -> Optional[dict]:
