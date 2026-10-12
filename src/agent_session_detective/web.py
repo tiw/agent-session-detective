@@ -1179,6 +1179,10 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", ctype + "; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
+        # Assets change between releases with no URL fingerprint; without
+        # this a browser keeps running a heuristically-cached app.js
+        # against new payloads. Localhost tool: correctness over caching.
+        self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(body)
 

@@ -1561,5 +1561,31 @@ class FleetProcessGroupsTests(unittest.TestCase):
         self.assertGreaterEqual(groups["pipeline"]["avg_turns"], 1)
 
 
+class StaticAssetCacheTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        import threading
+
+        cls.server = ThreadingHTTPServer(("127.0.0.1", 0), web.Handler)
+        cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
+        cls.thread.start()
+        cls.base = "http://127.0.0.1:%d" % cls.server.server_address[1]
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server.shutdown()
+        cls.server.server_close()
+
+    def test_static_assets_are_never_served_from_browser_cache(self):
+        # app.js changes between releases with no URL fingerprint, so a
+        # heuristically-cached copy would keep running stale UI code
+        # against new payloads. The localhost tool trades caching for
+        # correctness.
+        for path in ("/static/app.js", "/static/style.css"):
+            with urllib.request.urlopen(self.base + path) as r:
+                headers = {k.lower(): v for k, v in r.headers.items()}
+            self.assertEqual(headers.get("cache-control"), "no-store", path)
+
+
 if __name__ == "__main__":
     unittest.main()
