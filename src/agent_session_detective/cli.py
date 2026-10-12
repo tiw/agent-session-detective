@@ -22,6 +22,7 @@ from .if_eval import IFResult, evaluate_playbook
 from .ir import build_analyses, build_audit_document
 from .ir.gap import gap_candidates, skill_gaps
 from .ir.library import library_report
+from .ir.process import process_signature
 from .judge import Judge, judge_session
 from .report import render_report
 from .timeline import build_timeline
@@ -223,6 +224,7 @@ def main(argv=None) -> int:
     gap = skill_gaps(
         document.skills, catalog, judgments, stats=gap_stats,
         judge_configured=judge is not None)
+    process_block = process_signature(document)
 
     if_results = []
     if args.steps:
@@ -273,6 +275,7 @@ def main(argv=None) -> int:
         document=document,
         injected_skills={s.name: s for s in injected},
         gap=gap,
+        process=process_block,
     )
     out_path = Path(args.out) if args.out else _default_output_path(session_source)
     out_path.write_text(report, encoding="utf-8")

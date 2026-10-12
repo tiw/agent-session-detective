@@ -561,5 +561,24 @@ class SkillGapWiringTests(unittest.TestCase):
             self.assertTrue(gap["unjudged"]["judge_unconfigured"])
 
 
+class ProcessWiringTests(unittest.TestCase):
+    def test_cli_passes_process_block_to_report(self):
+        with tempfile.TemporaryDirectory() as directory:
+            transcript = Path(directory) / "foo.jsonl"
+            shutil.copy(FIXTURES / "qoder-transcript.jsonl", transcript)
+
+            with patch("agent_session_detective.cli.render_report",
+                       return_value="<html>report</html>") as render:
+                exit_code = cli.main([str(transcript), "--no-judge"])
+
+            self.assertEqual(exit_code, 0)
+            process = render.call_args.kwargs["process"]
+            self.assertIn(process["style"], ("pipeline", "direct", "mixed"))
+            self.assertEqual(
+                sorted(process),
+                ["inject", "interventions", "listing", "notes",
+                 "skill_loads", "style", "workflow"])
+
+
 if __name__ == "__main__":
     unittest.main()

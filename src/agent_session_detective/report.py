@@ -304,6 +304,7 @@ def render_report(
     document: Optional["AuditDocument"] = None,
     injected_skills: Optional[dict] = None,
     gap: Optional[dict] = None,
+    process: Optional[dict] = None,
 ) -> str:
     if_results = if_results or []
     missed = [j for j in judgments if j.triggered]
@@ -512,6 +513,46 @@ def render_report(
             parts.append("</table>")
         for note in gap["notes"]:
             parts.append("<p class='dim'>%s</p>" % esc(note))
+
+    # --- Process signature (direct vs pipeline machinery) ---
+    # An observational lens, not a verdict about which flow is better:
+    # machinery features are log facts, the style is a presence rule, and
+    # confounds (task difficulty) are stated rather than controlled.
+    if process is not None:
+        wf = process["workflow"]
+        listing = process["listing"]
+        inject = process["inject"]
+        loads = process["skill_loads"]
+        inter = process["interventions"]
+        protocol = 0
+        if token_stats is not None:
+            protocol = token_stats.repeat_class_totals.get(
+                "post_compaction") or 0
+        ceremony = listing["reinject_tokens_est"] + protocol
+        parts.append("<h2>流程签名</h2>")
+        parts.append(
+            "<p><span class='badge'>style: %s</span>"
+            "<span class='badge'>workflow 触碰: %d 读 / %d 写</span>"
+            "<span class='badge'>skill loads: %d (%d reload)</span>"
+            "<span class='badge'>inject: %d 项 ~%d tokens</span>"
+            "<span class='badge'>干预: %d (%d 信号)</span></p>"
+            % (esc(process["style"]), wf["reads"], wf["writes"],
+               loads["loads"], loads["reloads"],
+               inject["items"], inject["tokens_est"],
+               inter["total"], inter["signal"]))
+        parts.append(
+            "<p class='dim'>listing: %d skill / %d 次（重注入 %d 次 ~%d tokens）"
+            " · ceremony ~%d tokens = listing 重注入 ~%d + 协议重读 ~%d"
+            "（透镜口径：这部分已分别含在上下文增长与重复注入税内）</p>"
+            % (listing["skills"], listing["occurrences"],
+               listing["reinject_occurrences"],
+               listing["reinject_tokens_est"],
+               ceremony, listing["reinject_tokens_est"], protocol))
+        for note in process["notes"]:
+            parts.append("<p class='dim'>%s</p>" % esc(note))
+        parts.append(
+            "<p class='dim'>观测对比非随机对照：任务难度等混杂未控制；"
+            "跨会话对比看 fleet 分组，配对结论需同任务直通/pipeline 各跑一次。</p>")
 
     # --- Instruction Following ---
     if if_results:

@@ -219,5 +219,51 @@ class SkillGapSectionTests(unittest.TestCase):
         self.assertIn("trigger GAPs not evaluated", html)
 
 
+def process_block(style="pipeline"):
+    return {
+        "style": style,
+        "inject": {"items": 3, "tokens_est": 8400},
+        "listing": {"skills": 37, "occurrences": 74,
+                    "reinject_occurrences": 37, "reinject_tokens_est": 4200},
+        "skill_loads": {"loads": 5, "reloads": 2},
+        "workflow": {"reads": 14, "writes": 6},
+        "interventions": {"total": 20, "signal": 8},
+        "notes": [],
+    }
+
+
+class ProcessSectionTests(unittest.TestCase):
+    def render_with_process(self, process, token_stats=None):
+        with tempfile.TemporaryDirectory() as td:
+            transcript = Path(td) / "t.jsonl"
+            shutil.copy(FIXTURES / "qoder-transcript.jsonl", transcript)
+            session = load_session(transcript)
+            return render_report(
+                session, build_timeline(session), [],
+                judge_enabled=True, catalog_size=6,
+                process=process, token_stats=token_stats)
+
+    def test_section_renders_style_and_features(self):
+        html = self.render_with_process(process_block())
+        self.assertIn("流程签名", html)
+        self.assertIn("pipeline", html)
+        self.assertIn("14 读", html)
+        self.assertIn("4200", html)
+
+    def test_section_renders_ceremony_with_protocol_reread(self):
+        from agent_session_detective.tokenstats import TokenStats
+        stats = TokenStats(repeat_class_totals={"post_compaction": 900})
+        html = self.render_with_process(process_block(), token_stats=stats)
+        self.assertIn("ceremony ~5100", html)
+        self.assertIn("协议重读 ~900", html)
+
+    def test_note_lines_render(self):
+        block = process_block("mixed")
+        block["notes"] = ["no skill listings observed — listing "
+                          "re-injection is unmeasurable"]
+        html = self.render_with_process(block)
+        self.assertIn("unmeasurable", html)
+
+
 if __name__ == "__main__":
     unittest.main()
