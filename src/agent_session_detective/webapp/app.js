@@ -78,7 +78,12 @@
       "双账单：成本行回答 tokens 废在哪，路由行回答该加载的加载了吗。" +
       "行等级：事实 = 渠道直接测量；观测 = provider 遥测；证据 = 配对台账；推断 = 估算。" +
       "share 只在 EST 口径小计内计算（上下文增长/重复注入税/技能加载成本/subagent 返回），" +
-      "输出与缓存率不入分母；无分母则不显示百分比。subagent 行可展开查看臃肿派发明细。"
+      "输出与缓存率不入分母；无分母则不显示百分比。subagent 行可展开查看臃肿派发明细。",
+    "gaps":
+      "SKILL.md 期望 × IR 实际的差距。missed triggers = LLM 反事实判定「该触发却没触发」" +
+      "（是判断不是事实，证据须逐字可核对）；loaded but never executed = 正文进了上下文却从未执行；" +
+      "IR-only = 会话里出现但磁盘 catalog 找不到的 skill（版本或命名漂移信号）。" +
+      "unjudged 计数保持透明：预过滤剔除与超限未判的都不冒充已判。"
   };
 
   var TEMPLATES = {
@@ -1226,6 +1231,44 @@
         (loadTotals.unavailable ? " · unavailable rows carry the marker, not a guess" : "") +
         "</p></section>"
       );
+    }
+
+    // Skill GAP: SKILL.md expectation vs IR actual; judgments are LLM output
+    // carried with verbatim evidence — never presented as facts
+    if (r.skill_gaps) {
+      var g = r.skill_gaps;
+      var gapCards = g.missed_triggers.map(function (m) {
+        return "<details><summary>" + esc(m.name) +
+          " <span class='dim'>turn " + (m.turn == null ? "—" : m.turn) +
+          " · confidence " + Number(m.confidence).toFixed(2) + "</span></summary>" +
+          "<p>" + esc(m.rationale) + "</p><pre>" + esc(m.evidence) + "</pre></details>";
+      }).join("");
+      var unusedRows = g.loaded_unused.map(function (row) {
+        return "<tr><td>" + esc(row.name) + "</td><td>" +
+          (row.description ? esc(row.description) : "<span class='dim'>no catalog entry</span>") +
+          "</td><td>" + row.bodies + "</td><td>" + row.stubs + "</td></tr>";
+      }).join("");
+      var irOnlyRows = g.join.ir_only.map(function (row) {
+        return "<tr><td>" + esc(row.skill_id) + "</td><td>" + row.listed +
+          "</td><td>" + row.loaded + "</td><td>" + row.executed + "</td></tr>";
+      }).join("");
+      var unj = g.unjudged;
+      parts.push(
+        "<section id='gaps'><h2>skill gaps " + helpDot("gaps") + "</h2>" +
+        "<p class='dim'>catalog matched " + g.join.matched + " · IR-only " + g.join.ir_only.length +
+        " · catalog-only " + g.join.catalog_only + " · listed " + g.sets.listed +
+        " / loaded " + g.sets.loaded + " / executed " + g.sets.executed + "</p>" +
+        (unj.judge_unconfigured
+          ? "<p class='dim'>judge off — trigger GAPs not evaluated.</p>"
+          : ((unj.count || unj.judge_errors)
+            ? "<p class='dim'>unjudged " + unj.count + " (prefiltered " + unj.prefiltered +
+              " · over limit " + unj.over_limit + ") · judge defects " + unj.judge_errors + "</p>"
+            : "")) +
+        (gapCards ? "<h3>missed triggers</h3>" + gapCards : "") +
+        (unusedRows ? "<h3>loaded but never executed</h3><table><tr><th>skill</th><th>declared use</th><th>bodies</th><th>stubs</th></tr>" + unusedRows + "</table>" : "") +
+        (irOnlyRows ? "<h3>IR-only (no catalog entry)</h3><table><tr><th>skill</th><th>listed</th><th>loaded</th><th>executed</th></tr>" + irOnlyRows + "</table>" : "") +
+        g.notes.map(function (n) { return "<p class='dim'>" + esc(n) + "</p>"; }).join("") +
+        "</section>");
     }
 
     parts.push(renderTokenStats(r.token_stats));
