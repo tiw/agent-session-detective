@@ -52,6 +52,13 @@ def _counts(skills: Sequence[SkillEntity]) -> Dict[str, dict]:
     return out
 
 
+def _join_keys(entry: dict) -> List[str]:
+    """Casefolded identity keys for one IR entry; empty keys never match."""
+    keys = [entry["skill_id"].casefold()]
+    keys.extend(alias.casefold() for alias in entry["aliases"])
+    return [key for key in keys if key]
+
+
 def _join(counts: Dict[str, dict],
           catalog: Sequence[Skill]) -> Tuple[Dict[str, Skill], List[dict], int]:
     """Match IR ids (+aliases) against catalog names, lowercased.
@@ -64,7 +71,7 @@ def _join(counts: Dict[str, dict],
     matched: Dict[str, Skill] = {}
     ir_only: List[dict] = []
     for skill_id, entry in counts.items():
-        keys = [skill_id.lower()] + [a.lower() for a in entry["aliases"]]
+        keys = _join_keys(entry)
         hit = next((by_name[k] for k in keys if k in by_name), None)
         if hit is None:
             ir_only.append({
@@ -180,6 +187,7 @@ def skill_gaps(skills: Sequence[SkillEntity], catalog: Sequence[Skill],
 
 
 def _session_text(items: Sequence[ContentItem]) -> str:
+    """The session's typed human input, casefolded for name matching."""
     return "\n".join(
         item.human_text for item in items if item.human_text).casefold()
 
@@ -211,7 +219,7 @@ def gap_candidates(skills: Sequence[SkillEntity],
         if catalog_skill is None:
             prefiltered += 1
             continue
-        keys = [skill_id.lower()] + [a.lower() for a in entry["aliases"]]
+        keys = _join_keys(entry)
         if not any(k in text for k in keys):
             prefiltered += 1
             continue

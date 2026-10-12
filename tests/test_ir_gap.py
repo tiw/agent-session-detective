@@ -230,3 +230,22 @@ class GapCandidatesTest(unittest.TestCase):
         self.assertEqual(gap["unjudged"]["count"], 1)
         self.assertEqual(gap["missed_triggers"], [])
         self.assertTrue(any("prefiltered" in n for n in gap["notes"]))
+
+    def test_empty_items_still_counts_listed_unloaded(self):
+        skills = [entity("alpha", ("listing",))]
+        catalog = [make_skill("alpha")]
+
+        pairs, stats = gap_candidates(skills, [], catalog)
+
+        self.assertEqual(pairs, [])
+        self.assertEqual(
+            stats, {"listed_unloaded": 1, "candidates": 0, "prefiltered": 1})
+
+    def test_item_without_human_text_is_ignored(self):
+        skills = [entity("alpha", ("listing",))]
+        catalog = [make_skill("alpha")]
+
+        pairs, stats = gap_candidates(
+            skills, [make_item(1, None), make_item(2, "mention alpha")], catalog)
+
+        self.assertEqual([skill.name for _, skill in pairs], ["alpha"])
