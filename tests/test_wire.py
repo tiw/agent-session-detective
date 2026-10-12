@@ -355,6 +355,26 @@ class QoderTranscriptTests(unittest.TestCase):
         self.assertEqual(events[4].ref["uuid"], "a2")
         self.assertEqual(events[4].ref["parent_uuid"], "a1")
 
+    def test_parent_tool_use_id_reads_snake_case_key(self):
+        # Two key spellings: the multi-file shape writes camelCase
+        # parentToolUseId on subagent-file records, the merged single-file
+        # shape writes snake_case parent_tool_use_id on inline sidechain
+        # records. Both must surface in the ref.
+        records = [
+            {"type": "user", "timestamp": "2026-10-10T08:00:00.000Z",
+             "uuid": "s1", "parentUuid": None, "isSidechain": True,
+             "parent_tool_use_id": "call_inline",
+             "message": {"content": [{"type": "text", "text": "brief"}]}},
+            {"type": "assistant", "timestamp": "2026-10-10T08:00:01.000Z",
+             "uuid": "s2", "parentUuid": "s1", "isSidechain": True,
+             "parentToolUseId": "call_camel",
+             "message": {"model": "m", "content": [{"type": "text", "text": "hi"}]}},
+        ]
+        events = self._load_records(records)
+
+        self.assertEqual(events[0].ref["parent_tool_use_id"], "call_inline")
+        self.assertEqual(events[1].ref["parent_tool_use_id"], "call_camel")
+
     def test_falls_back_to_usage_request_id_when_no_token_anchor_is_present(self):
         # Qoder only began writing requestTokenAnchor in 1.1.58. Older
         # transcripts still name the request, but only inside the usage block.

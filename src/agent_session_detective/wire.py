@@ -413,7 +413,10 @@ def _qoder_ref(record: dict) -> dict:
         "uuid": record.get("uuid"),
         "parent_uuid": record.get("parentUuid"),
         "is_sidechain": record.get("isSidechain"),
-        "parent_tool_use_id": record.get("parentToolUseId"),
+        # CamelCase was the multi-file shape's key; the merged single-file
+        # runtime shape writes snake_case on inline sidechain records.
+        "parent_tool_use_id": record.get(
+            "parentToolUseId", record.get("parent_tool_use_id")),
         "request_id": request_id,
         "request_hash": anchor.get("request"),
         "response_hash": anchor.get("response"),
