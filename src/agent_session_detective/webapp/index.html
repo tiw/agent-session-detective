@@ -19,12 +19,14 @@
     <div class="sidebar-head">
       <h1>sessions</h1>
       <div>
+        <button class="btn small" id="upload-btn" type="button" title="上传一份 jsonl 会话文件（如别人机器导出的 transcript），落盘后与扫描会话同等分析">upload</button>
         <button class="btn small" id="fleet-btn" type="button" title="跨会话聚合，需要解析全部日志，约 10 秒">fleet</button>
         <button class="btn small" id="refresh" type="button">rescan</button>
       </div>
     </div>
     <input class="session-search" id="session-search" type="search" autocomplete="off"
            placeholder="search all sessions by id / workspace…">
+    <input type="file" id="upload-input" accept=".jsonl" hidden>
     <div class="fleet" id="fleet" hidden></div>
     <div class="session-list" id="session-list"></div>
   </aside>

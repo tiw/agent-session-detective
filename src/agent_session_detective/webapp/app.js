@@ -242,8 +242,22 @@
           '<div class="session-id">' + esc(s.id.slice(0, 8)) + "</div>" +
           '<div class="session-meta">' +
           badge("dim", fmtTs(s.mtime).slice(5, 16)) +
+          (s.uploaded ? badge("ok", "upload") : "") +
           (s.cached ? badge("ok", "audited") : "") +
           "</div>";
+        el.title = s.path;
+        if (s.uploaded) {
+          var del = document.createElement("button");
+          del.className = "session-del";
+          del.type = "button";
+          del.title = "删除这份上传（磁盘文件一并删除）";
+          del.textContent = "×";
+          del.addEventListener("click", function (ev) {
+            ev.stopPropagation();
+            deleteUploaded(s);
+          });
+          el.appendChild(del);
+        }
         el.addEventListener("click", function () { openAudit(s, el); });
         sessionList.appendChild(el);
       });
@@ -337,6 +351,79 @@
   document.getElementById("refresh").addEventListener("click", function () {
     loadSessions(searchInput.value);
   });
+
+  // ------------------------------------------------------------------
+  // upload: a session file from anywhere (typically an export from
+  // another machine) persists in the managed uploads dir and is then
+  // just a session with a path — the audit flow treats it identically.
+  // ------------------------------------------------------------------
+
+  var uploadInput = document.getElementById("upload-input");
+  var uploadBtn = document.getElementById("upload-btn");
+  var sidebar = document.querySelector(".sidebar");
+
+  function uploadFile(file) {
+    if (!file) return;
+    setStatus("uploading " + file.name + "…");
+    fetch("/api/upload?name=" + encodeURIComponent(file.name), {
+      method: "POST",
+      body: file,
+    }).then(function (r) {
+      return r.json().then(function (data) { return { ok: r.ok, data: data }; });
+    }).then(function (res) {
+      if (!res.ok) {
+        setStatus("upload failed: " + (res.data.error || "unknown error"));
+        return;
+      }
+      loadSessions();
+      openAudit(res.data.session, null);
+      setStatus("uploaded " + res.data.session.id +
+        (res.data.dedup ? " (already uploaded — reused)" : "") +
+        " · pick params and run audit");
+    }).catch(function (e) {
+      setStatus("upload failed: " + e.message);
+    });
+  }
+
+  if (uploadBtn) {
+    uploadBtn.addEventListener("click", function () { uploadInput.click(); });
+  }
+  if (uploadInput) {
+    uploadInput.addEventListener("change", function () {
+      uploadFile(uploadInput.files[0]);
+      uploadInput.value = "";
+    });
+  }
+  if (sidebar) {
+    sidebar.addEventListener("dragover", function (ev) {
+      ev.preventDefault();
+      sidebar.classList.add("drop");
+    });
+    sidebar.addEventListener("dragleave", function () {
+      sidebar.classList.remove("drop");
+    });
+    sidebar.addEventListener("drop", function (ev) {
+      ev.preventDefault();
+      sidebar.classList.remove("drop");
+      uploadFile(ev.dataTransfer && ev.dataTransfer.files[0]);
+    });
+  }
+
+  function deleteUploaded(session) {
+    if (!confirm("删除上传的会话 " + session.id + "？磁盘文件会一并删除。")) return;
+    setStatus("deleting " + session.id + "…");
+    fetch("/api/upload?path=" + encodeURIComponent(session.path), {
+      method: "DELETE",
+    }).then(function (r) {
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      return r.json();
+    }).then(function () {
+      loadSessions(searchInput.value);
+      setStatus("deleted upload " + session.id);
+    }).catch(function (e) {
+      setStatus("delete failed: " + e.message);
+    });
+  }
 
   function collectDirs() {
     return (auditForm.elements.dirs.value || "").split("\n").map(function (s) {
