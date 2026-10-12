@@ -132,7 +132,7 @@ PYTHONPATH=src python3 -m agent_session_detective --serve          # http://127.
 PYTHONPATH=src python3 -m agent_session_detective --serve --port 9000
 ```
 
-- **会话列表**：扫描 `~/.kimi-code/sessions` 和 `~/.kimi/sessions` 两个根目录，显示**最近 10 个**会话（工作区 + 时间 + 是否已审计）。列表只做文件发现（stat 级，毫秒级），不解析日志——轮数/skill/token 统计都在你点审计那一刻才算
+- **会话列表**：扫描 Kimi 两个会话根、`~/.qoder/projects` 和 `~/.codex/sessions`，默认显示**最近 10 个**会话（工作区 + 时间 + 是否已审计）；侧栏搜索框按 session id / 工作区名在**全部**已发现会话里过滤（发现到的远多于 10 个，老会话靠搜索触达）。列表只做文件发现（stat 级，毫秒级），不解析日志——轮数/skill/token 统计都在你点审计那一刻才算
 - **skill 目录**：表单里可追加任意多个 skill 目录（每行一个），用于把运行时真实可用的 skill 纳入审计范围——默认只扫 `~/.agents/skills` 和 `~/.kimi/skills`，harness 内置的 plugin skill 大多不在其中。输入时会实时显示每个目录贡献了多少 skill、目录是否存在（同名的按版本去重）。用户提供的目录会**递归**查找（plugin cache 是 `<vendor>/<plugin>/<version>/SKILL.md` 的嵌套布局），默认目录仍走一层 glob
 - **skill 原文注入**：表单里直接粘 JSON，手工提供 skill 的真实原文。同名条目**覆盖** catalog 里的解析结果（提供原文的目的就是纠正它），catalog 里没有的直接新增——这是把 harness 内置 skill 纳入审计的手段。`intent` 字段是你对「这个 skill 干什么」的说法，会给 judge 做参考，但报告里始终标注为人工提供，不会冒充日志事实。粘贴时即时校验：JSON 语法错误会当场提示，条目缺 `description` 且无 `body_path` 会被标出来（那类条目会被跳过）。命令行等价物是 `--injected PATH`
 - **catalog audit**：右上角按钮，**离线静态体检 skill catalog 本身**——不需要会话日志、不调用 LLM、不需要任何凭据，点一下就出四块结论：**体量分级**（激活一个 skill 要付多少 token，按 token 排序，超标的置顶）、**description 质量**（路由文案是否冗余/过短/根本没解析出来）、**分层有效性比值**（discovery 常驻 vs activation 潜在，量化「渐进式披露」这套机制本身划不划算）、**解析健康度**（哪些 skill 会因为缺路由依据而被误判）。表单里的 skill 目录和注入原文对它同样生效。**它和会话行为审计是两回事**：体检只说 catalog 的成本与缺陷，不评价 agent 表现，两份报告不合并成一个分数。阈值是经验值（500 行 / 300 字符），不是规范要求，命令行可覆盖
@@ -141,7 +141,7 @@ PYTHONPATH=src python3 -m agent_session_detective --serve --port 9000
 - **报告渲染**：expectations 核对表、findings、IF 逐步判定、skill 生命周期、事件流，与 CLI 版同一套数据形状
 - **事件流角色 badge**：每条事件标注 `user` / `think` / `say` / `tool` / `result` / `compact`，人的输入、模型思考、模型回复、工具 traffic 一眼分开
 
-JSON API 也可以独立使用（`GET /api/sessions`（最近 10 个，纯发现）、`GET /api/fleet`（按需全量聚合，慢）、`POST /api/scan-dirs`（预览每个目录贡献多少 skill）、`POST /api/catalog-audit`（离线静态体检，同 CLI 的 `catalog-audit`）、`POST /api/audit`、`GET /api/job/<id>`、`GET /api/playbooks`），方便接进自己的工具链。
+JSON API 也可以独立使用（`GET /api/sessions?q=<关键词>`（无 `q` 时最近 10 个，带 `q` 时在全部已发现会话里按 id/工作区名过滤、最多 50 条，纯发现）、`GET /api/fleet`（按需全量聚合，慢）、`POST /api/scan-dirs`（预览每个目录贡献多少 skill）、`POST /api/catalog-audit`（离线静态体检，同 CLI 的 `catalog-audit`）、`POST /api/audit`、`GET /api/job/<id>`、`GET /api/playbooks`），方便接进自己的工具链。
 
 > ⚠️ 服务无鉴权，只绑定 `127.0.0.1`，不要暴露到公网。
 
