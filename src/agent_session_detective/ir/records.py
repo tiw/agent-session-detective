@@ -193,6 +193,14 @@ def attribute_agents(records: List[WireRecord]) -> List[AgentRecords]:
     return groups
 
 
+def is_subagent_agent(agent_id: str) -> bool:
+    """Both subagent channels produce dispatchable agents: separate
+    transcript files ("subagent:<stem>", "subagent:ide-db:<id>") and
+    sidechain records merged into the main transcript
+    ("sidechain:<root-uuid>")."""
+    return agent_id.startswith(("subagent:", "sidechain:"))
+
+
 def detect_tier(records: List[WireRecord]) -> int:
     for record in records:
         if record.request_hash is not None:

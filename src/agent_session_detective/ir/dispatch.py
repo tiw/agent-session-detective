@@ -32,14 +32,14 @@ import json
 from typing import Dict, List, Optional, Tuple
 
 from .phase_rules import CORPUS_NOTE, RULE_SET_VERSION, RULES, match_refs, rule_name
-from .records import AgentRecords
+from .records import AgentRecords, is_subagent_agent
 from .schema import ContentItem, Dispatch, PhaseEntity, PhaseObservation
 
 SIGNATURE_CHANNEL = "qoder:signature:skill_body"
 
 
 def _is_subagent(agent_id: str) -> bool:
-    return agent_id.startswith("subagent:")
+    return is_subagent_agent(agent_id)
 
 
 def _agent_items(items: List[ContentItem], agent_id: str) -> List[ContentItem]:

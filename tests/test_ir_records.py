@@ -6,6 +6,7 @@ from agent_session_detective.ir.records import (
     attribute_agents,
     detect_tier,
     group_records,
+    is_subagent_agent,
 )
 from tests.ir_helpers import IREventsTestCase
 
@@ -145,6 +146,16 @@ class RecordsTest(IREventsTestCase):
 
         self.assertEqual(len(groups), 1)
         self.assertTrue(groups[0].agent_id.startswith("sidechain:"))
+
+    def test_is_subagent_agent_covers_both_channels(self):
+        # "subagent:<stem>" = separate transcript files;
+        # "subagent:ide-db:<id>" = IDE-DB synthesized;
+        # "sidechain:<root-uuid>" = inline records in the merged shape.
+        self.assertTrue(is_subagent_agent("subagent:worker"))
+        self.assertTrue(is_subagent_agent("subagent:ide-db:abc"))
+        self.assertTrue(is_subagent_agent("sidechain:s1"))
+        self.assertFalse(is_subagent_agent("main"))
+        self.assertFalse(is_subagent_agent("sidechain"))
 
 
 if __name__ == "__main__":

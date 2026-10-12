@@ -32,6 +32,7 @@ from dataclasses import asdict
 from typing import Dict, List, Set, Tuple
 
 from .schema import AuditDocument, ContentItem
+from .records import is_subagent_agent
 from .skill_tree import skill_tree
 
 RE_INJECTION_BUCKETS = ("inject", "skill")
@@ -325,7 +326,7 @@ def subagent_returns(document: AuditDocument) -> dict:
             returns_by_tool.setdefault(item.tool_use_id, item)
     sub_items: Dict[str, List[ContentItem]] = {}
     for item in document.items:
-        if item.agent_id.startswith("subagent:"):
+        if is_subagent_agent(item.agent_id):
             sub_items.setdefault(item.agent_id, []).append(item)
     rows = []
     linked = 0

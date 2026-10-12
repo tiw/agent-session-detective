@@ -164,6 +164,33 @@ def single_dispatch_session(test, brief_text, sub_records=()):
     return test.load_lines(main_lines, subagents={"probe": records})
 
 
+def inline_sidechain_session(test):
+    """The merged single-file shape: sidechain records inline in the main
+    transcript, joined by snake_case parent_tool_use_id — no subagent files,
+    no sidecars."""
+    ts = _clock()
+    lines = [
+        user_record(ts(), "m1", "kick off"),
+        assistant_record(
+            ts(), "m2",
+            tool_use=("call_inline", "Agent",
+                      {"subagent_type": "code", "description": "merged worker"}),
+            request_id="req-1", parent="m1"),
+        {"type": "user", "uuid": "s1", "parentUuid": None, "isSidechain": True,
+         "timestamp": ts(), "parent_tool_use_id": "call_inline",
+         "message": {"content": [{"type": "text", "text": "alpha-flow do the work"}]}},
+        {"type": "assistant", "uuid": "s2", "parentUuid": "s1", "isSidechain": True,
+         "timestamp": ts(),
+         "requestTokenAnchor": {"request": "r" * 64, "response": "s" * 64,
+                                "requestId": "req-s1"},
+         "message": {"model": "qoder-pro",
+                     "content": [{"type": "text", "text": "done"}],
+                     "usage": {"input_tokens": 900, "output_tokens": 5,
+                               "request_id": "req-s1"}}},
+    ]
+    return test.load_lines(lines)
+
+
 class DispatchJoinTest(IREventsTestCase, unittest.TestCase):
     def test_join_fixture_covers_both_directions_and_the_meta_fallback(self):
         document = audit(self)
@@ -330,6 +357,27 @@ class DispatchJoinTest(IREventsTestCase, unittest.TestCase):
              links["unmatched_subagent_files"]),
             (2, 2, 0, 0),
         )
+
+
+class InlineSidechainJoinTest(IREventsTestCase, unittest.TestCase):
+    def test_inline_sidechain_joins_via_snake_case_parent_tool_use_id(self):
+        document = build_audit_document(inline_sidechain_session(self), "qoder")
+
+        self.assertEqual(len(document.dispatches), 1)
+        dispatch = document.dispatches[0]
+        self.assertEqual(dispatch.subagent_agent_id, "sidechain:s1")
+        self.assertEqual(dispatch.subagent_type, "code")
+        self.assertIsNotNone(dispatch.brief_item_id)
+
+    def test_inline_sidechain_counts_as_a_subagent_process(self):
+        from agent_session_detective.ir.analyses import subagent_returns
+        document = build_audit_document(inline_sidechain_session(self), "qoder")
+
+        returns = subagent_returns(document)
+
+        self.assertEqual(returns["totals"]["linked"], 1)
+        self.assertEqual(returns["totals"]["process_unavailable"], 0)
+        self.assertIsNotNone(returns["rows"][0]["subagent_tokens_est"])
 
 
 class BriefClassificationTest(IREventsTestCase, unittest.TestCase):
