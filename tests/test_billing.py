@@ -61,6 +61,15 @@ class SessionUuidTest(unittest.TestCase):
             source.write_text("{}", encoding="utf-8")
             self.assertEqual(session_uuid_from_source(source), UUID.lower())
 
+    def test_uuid_prefixed_stem_yields_the_leading_uuid(self):
+        # Exported transcripts carry display suffixes after the uuid
+        # ("<uuid>-木晓-20261010"); the DB join key is the leading uuid,
+        # and both billed usage and the IDE-DB chain route through this.
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / (UUID + "-木晓-20261010.jsonl")
+            source.write_text("{}", encoding="utf-8")
+            self.assertEqual(session_uuid_from_source(source), UUID)
+
     def test_non_uuid_name_is_not_a_session(self):
         with tempfile.TemporaryDirectory() as directory:
             source = Path(directory) / "tier1.jsonl"

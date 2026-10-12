@@ -24,8 +24,9 @@ DEFAULT_DB_PATH = Path(
 
 SOURCE = "SharedClientCache chat_message.token_info"
 
-_UUID_RE = re.compile(
-    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+_UUID_STEM_RE = re.compile(
+    r"^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})"
+    r"(?:[-_.].+)?$",
     re.IGNORECASE,
 )
 
@@ -36,12 +37,16 @@ class BillingUnavailable(Exception):
 
 
 def session_uuid_from_source(source_path: Path) -> Optional[str]:
-    """The SharedClientCache join key: the Qoder transcript's uuid stem."""
+    """The SharedClientCache join key: the Qoder transcript's uuid stem.
+
+    The stem may carry a display suffix after the uuid (exported transcripts
+    like ``<uuid>-木晓-20261010``); the leading uuid is the join key.
+    """
     source_path = Path(source_path)
     if not source_path.is_file() or source_path.suffix != ".jsonl":
         return None
-    stem = source_path.stem
-    return stem.lower() if _UUID_RE.match(stem) else None
+    match = _UUID_STEM_RE.match(source_path.stem)
+    return match.group(1).lower() if match else None
 
 
 def _gmt_create_to_ts(value) -> Optional[float]:
