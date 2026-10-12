@@ -12,12 +12,12 @@ from typing import Dict, List, Optional, Tuple
 
 from .. import __version__ as ASD_VERSION
 
-# IR 1.8: inline-sidechain dispatches join in-band (snake_case
-# parent_tool_use_id + sidechain: agent classification), so dispatch rows
-# that previously rendered as orphans now carry subagent_agent_id and the
-# returns ledger counts their process tokens. Cached web results must
+# IR 1.9: ContentItem.file_path — tool-call arguments are parsed at
+# extraction time, the only place the full argument text exists (items keep
+# a preview). Consumers: process-signature workflow-file matching; a full
+# file-read ledger can reuse the field later. Cached web results must
 # recompute (fingerprint embeds ir<IR_VERSION>).
-IR_VERSION = "1.8"
+IR_VERSION = "1.9"
 
 BUCKETS: Tuple[str, ...] = (
     "system",
@@ -112,6 +112,9 @@ class ContentItem:
     # Typed text (IR 1.3): the log's own humanInput.text — not the harness
     # expansion that preview/size_chars measure and token attribution counts.
     human_text: Optional[str] = None
+    # File-path argument (IR 1.9): parsed from this tool call's arguments
+    # at extraction; None = no path key or unparseable arguments.
+    file_path: Optional[str] = None
 
 
 @dataclass

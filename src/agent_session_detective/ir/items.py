@@ -82,6 +82,18 @@ def attachment_text(attachment: dict, text_key: Optional[str]) -> str:
     return flatten_text(attachment, SKIP_TEXT_KEYS)
 
 
+def _parse_tool_arguments(arguments) -> dict:
+    if isinstance(arguments, dict):
+        return arguments
+    if isinstance(arguments, str):
+        try:
+            parsed = json.loads(arguments)
+        except (TypeError, ValueError):
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    return {}
+
+
 def skill_signature(text: str) -> Optional[Tuple[str, str]]:
     match = SKILL_CONTENT_RE.search(text)
     if match:
@@ -117,7 +129,8 @@ def extract_items(records: List[WireRecord], agent_id: str) -> Extraction:
     part_index = 0
 
     def add(record, bucket, kind, text, channel, skill_id=None, name=None,
-            by_signature=False, tool_use_id=None, human_text=None):
+            by_signature=False, tool_use_id=None, human_text=None,
+            file_path=None):
         nonlocal part_index
         if not isinstance(text, str):
             text = flatten_text(text)
@@ -139,6 +152,7 @@ def extract_items(records: List[WireRecord], agent_id: str) -> Extraction:
             skill_id=skill_id,
             tool_use_id=tool_use_id,
             human_text=human_text,
+            file_path=file_path,
         )
         extraction.items.append(item)
         part_index += 1
@@ -163,29 +177,24 @@ def extract_items(records: List[WireRecord], agent_id: str) -> Extraction:
                 function = event.payload.get("function") or {}
                 name = function.get("name") or ""
                 arguments = function.get("arguments") or ""
+                parsed = _parse_tool_arguments(arguments)
                 skill_id = None
                 lowered = name.lower()
                 if lowered == "skill":
-                    try:
-                        parsed = json.loads(arguments)
-                    except (TypeError, ValueError):
-                        parsed = {}
-                    target = parsed.get("skill") if isinstance(parsed, dict) else None
+                    target = parsed.get("skill")
                     if isinstance(target, str) and target:
                         skill_id = target.lower()
-                elif lowered == "read":
-                    try:
-                        parsed = json.loads(arguments)
-                    except (TypeError, ValueError):
-                        parsed = {}
-                    file_path = parsed.get("file_path") if isinstance(parsed, dict) else None
-                    if isinstance(file_path, str) and SKILL_FILE_RE.search(file_path):
-                        tool_call_id = event.payload.get("id")
-                        if tool_call_id is not None:
-                            pending_case_reads[tool_call_id] = file_path
+                file_path = parsed.get("file_path")
+                if not isinstance(file_path, str) or not file_path:
+                    file_path = None
+                if lowered == "read" and file_path \
+                        and SKILL_FILE_RE.search(file_path):
+                    tool_call_id = event.payload.get("id")
+                    if tool_call_id is not None:
+                        pending_case_reads[tool_call_id] = file_path
                 add(record, "assistant", "tool_call", arguments, "qoder:assistant",
                     skill_id=skill_id, name=name or None,
-                    tool_use_id=event.payload.get("id"))
+                    tool_use_id=event.payload.get("id"), file_path=file_path)
             elif event.type == "TurnBegin":
                 texts = [
                     part.get("text")

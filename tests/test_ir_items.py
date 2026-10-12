@@ -392,5 +392,42 @@ class ItemsTest(IREventsTestCase):
         self.assertEqual([item.bucket for item in extraction.items], ["user"] * 3)
 
 
+class ToolCallFilePathTest(IREventsTestCase):
+    def extract(self, lines, agent_id="main"):
+        records = group_records(self.load_lines(lines).events)
+        return extract_items(records, agent_id)
+
+    def test_read_write_calls_carry_file_path(self):
+        extraction = self.extract(
+            [
+                assistant(1, [
+                    {"type": "tool_use", "id": "t1", "name": "Read",
+                     "input": {"file_path": "/ws/.changes/demo/progress.md"}},
+                    {"type": "tool_use", "id": "t2", "name": "Write",
+                     "input": {"file_path": "/ws/README.md"}},
+                ], usage=USAGE),
+            ]
+        )
+        self.assertEqual(
+            [i.file_path for i in extraction.items],
+            ["/ws/.changes/demo/progress.md", "/ws/README.md"])
+
+    def test_call_without_path_argument_stays_none(self):
+        extraction = self.extract(
+            [assistant(1, [
+                {"type": "tool_use", "id": "t1", "name": "Bash",
+                 "input": {"command": "ls"}},
+            ], usage=USAGE)])
+        self.assertIsNone(extraction.items[0].file_path)
+
+    def test_skill_call_has_no_file_path(self):
+        extraction = self.extract(
+            [assistant(1, [
+                {"type": "tool_use", "id": "t1", "name": "Skill",
+                 "input": {"skill": "demo"}},
+            ], usage=USAGE)])
+        self.assertIsNone(extraction.items[0].file_path)
+
+
 if __name__ == "__main__":
     unittest.main()
