@@ -580,9 +580,9 @@ blockquote {
 /* uploaded session rows: inline delete affordance + drop target state */
 .session-row { position: relative; }
 .session-del {
-  position: absolute; top: 6px; right: 6px;
+  position: absolute; top: 50%; transform: translateY(-50%); right: 4px;
   border: none; background: transparent; color: var(--dim);
-  font-size: 14px; line-height: 1; cursor: pointer; padding: 2px 5px;
+  font-size: 15px; line-height: 1; cursor: pointer; padding: 4px 7px;
   border-radius: 4px;
 }
 .session-del:hover { color: var(--bad); background: rgba(245, 80, 76, 0.1); }

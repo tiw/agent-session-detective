@@ -216,7 +216,7 @@
     var q = (query || "").trim();
     setStatus(q ? "searching all sessions for “" + q + "”…" : "scanning sessions…");
     var url = "/api/sessions" + (q ? "?q=" + encodeURIComponent(q) : "");
-    fetch(url).then(function (r) { return r.json(); }).then(function (data) {
+    return fetch(url).then(function (r) { return r.json(); }).then(function (data) {
       // sidebar is discovery-only: turns/skills/token stats are computed
       // on demand by the audit job, not here. fleet stays hidden until
       // the fleet button asks for it.
@@ -246,11 +246,13 @@
           (s.cached ? badge("ok", "audited") : "") +
           "</div>";
         el.title = s.path;
+        if (currentSession && s.path === currentSession.path) el.classList.add("active");
         if (s.uploaded) {
           var del = document.createElement("button");
           del.className = "session-del";
           del.type = "button";
           del.title = "删除这份上传（磁盘文件一并删除）";
+          del.setAttribute("aria-label", "删除这份上传");
           del.textContent = "×";
           del.addEventListener("click", function (ev) {
             ev.stopPropagation();
@@ -361,26 +363,35 @@
   var uploadInput = document.getElementById("upload-input");
   var uploadBtn = document.getElementById("upload-btn");
   var sidebar = document.querySelector(".sidebar");
+  var uploadBusy = false;
 
-  function uploadFile(file) {
+  function uploadFile(file, note) {
     if (!file) return;
-    setStatus("uploading " + file.name + "…");
+    if (uploadBusy) {
+      setStatus("upload already in progress…");
+      return;
+    }
+    uploadBusy = true;
+    setStatus("uploading " + file.name + (note || "") + "…");
     fetch("/api/upload?name=" + encodeURIComponent(file.name), {
       method: "POST",
       body: file,
     }).then(function (r) {
       return r.json().then(function (data) { return { ok: r.ok, data: data }; });
     }).then(function (res) {
+      uploadBusy = false;
       if (!res.ok) {
         setStatus("upload failed: " + (res.data.error || "unknown error"));
         return;
       }
-      loadSessions();
+      loadSessions(searchInput.value).then(function () {
+        setStatus("uploaded " + res.data.session.id +
+          (res.data.dedup ? " (already uploaded — reused)" : "") +
+          " · pick params and run audit");
+      });
       openAudit(res.data.session, null);
-      setStatus("uploaded " + res.data.session.id +
-        (res.data.dedup ? " (already uploaded — reused)" : "") +
-        " · pick params and run audit");
     }).catch(function (e) {
+      uploadBusy = false;
       setStatus("upload failed: " + e.message);
     });
   }
@@ -403,9 +414,13 @@
       sidebar.classList.remove("drop");
     });
     sidebar.addEventListener("drop", function (ev) {
-      ev.preventDefault();
       sidebar.classList.remove("drop");
-      uploadFile(ev.dataTransfer && ev.dataTransfer.files[0]);
+      if (!ev.dataTransfer || !ev.dataTransfer.files.length) return;
+      ev.preventDefault();
+      uploadFile(ev.dataTransfer.files[0],
+        ev.dataTransfer.files.length > 1
+          ? " (only the first of " + ev.dataTransfer.files.length + " dropped files)"
+          : "");
     });
   }
 
@@ -418,8 +433,9 @@
       if (!r.ok) throw new Error("HTTP " + r.status);
       return r.json();
     }).then(function () {
-      loadSessions(searchInput.value);
-      setStatus("deleted upload " + session.id);
+      loadSessions(searchInput.value).then(function () {
+        setStatus("deleted upload " + session.id);
+      });
     }).catch(function (e) {
       setStatus("delete failed: " + e.message);
     });
