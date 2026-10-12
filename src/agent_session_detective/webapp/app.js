@@ -89,7 +89,12 @@
       "SKILL.md 期望 × IR 实际的差距。missed triggers = LLM 反事实判定「该触发却没触发」" +
       "（是判断不是事实，证据须逐字可核对）；loaded but never executed = 正文进了上下文却从未执行；" +
       "IR-only = 会话里出现但磁盘 catalog 找不到的 skill（版本或命名漂移信号）。" +
-      "unjudged 计数保持透明：预过滤剔除与超限未判的都不冒充已判。"
+      "unjudged 计数保持透明：预过滤剔除与超限未判的都不冒充已判。",
+    "process":
+      "流程签名：这个会话跑在多少流程机器上。style = pipeline（workflow 状态文件读写 + skill 加载都在场）/" +
+      "direct（都没有）/mixed（只有一半）。inject = harness 注入体量；listing 重注入 = 同一 skill 目录被反复塞回上下文；" +
+      "ceremony = listing 重注入 + 压缩协议重读的透镜口径（已含在上下文增长/重复注入税内，不另计钱）。" +
+      "直通 vs pipeline 是观测对比非随机对照，任务难度混杂未控制。"
   };
 
   var TEMPLATES = {
@@ -322,7 +327,29 @@
               ? " (压缩恢复 " + (((fleet.repeat_class_totals || {}).post_compaction) || 0) +
                 " / 其它 " + Math.max(0, fleet.total_repeat_extra_tokens -
                   (((fleet.repeat_class_totals || {}).post_compaction) || 0)) + ")"
-              : ""));
+              : "")) +
+      (function () {
+        var groups = fleet.process_groups || {};
+        var keys = Object.keys(groups);
+        if (!keys.length) { return ""; }
+        var rows = keys.map(function (k) {
+          var g = groups[k];
+          return "<tr><td>" + esc(k) + "</td><td>" + g.sessions + "</td><td>" +
+            (g.avg_turns == null ? "—" : g.avg_turns) + "</td><td>" +
+            (g.avg_cache_hit_rate == null
+              ? "—" : Math.round(g.avg_cache_hit_rate * 100) + "%") + "</td><td>" +
+            (g.total_ceremony_tokens_est || 0) + "</td><td>" +
+            (g.total_repeat_extra_tokens || 0) + "</td><td>" +
+            (g.total_compactions || 0) + "</td><td>" +
+            (g.avg_interventions_signal == null
+              ? "—" : g.avg_interventions_signal) + "</td></tr>";
+        }).join("");
+        return '<span class="dim" style="flex-basis:100%">' +
+          "process（观测分组 · 非随机对照，任务难度混杂未控制）</span>" +
+          "<table><tr><th>style</th><th>sessions</th><th>avg turns</th>" +
+          "<th>avg cache</th><th>ceremony tok</th><th>repeat +</th>" +
+          "<th>compactions</th><th>avg 干预</th></tr>" + rows + "</table>";
+      })();
   }
 
   // ------------------------------------------------------------------
@@ -1427,6 +1454,27 @@
         (unusedRows ? "<h3>loaded but never executed</h3><table><tr><th>skill</th><th>declared use</th><th>bodies</th><th>stubs</th></tr>" + unusedRows + "</table>" : "") +
         (irOnlyRows ? "<h3>IR-only (no catalog entry)</h3><table><tr><th>skill</th><th>listed</th><th>loaded</th><th>executed</th></tr>" + irOnlyRows + "</table>" : "") +
         g.notes.map(function (n) { return "<p class='dim'>" + esc(n) + "</p>"; }).join("") +
+        "</section>");
+    }
+
+    if (r.process) {
+      var ps = r.process;
+      parts.push(
+        "<section id='process'><h2>process signature " + helpDot("process") + "</h2>" +
+        "<p>" +
+        badge(ps.style === "pipeline" ? "warn" : (ps.style === "direct" ? "ok" : "dim"),
+              "style: " + esc(ps.style)) +
+        badge("dim", "workflow " + ps.workflow.reads + " 读 / " + ps.workflow.writes + " 写") +
+        badge("dim", "loads " + ps.skill_loads.loads + " (" + ps.skill_loads.reloads + " reload)") +
+        badge("dim", "inject " + ps.inject.items + " 项 ~" + ps.inject.tokens_est + " tok") +
+        badge("dim", "干预 " + ps.interventions.signal + "/" + ps.interventions.total) +
+        "</p>" +
+        "<p class='dim'>listing " + ps.listing.skills + " skill / " + ps.listing.occurrences +
+        " 次 · 重注入 " + ps.listing.reinject_occurrences + " 次 ~" +
+        ps.listing.reinject_tokens_est + " tok · 观测对比非随机对照（任务难度混杂未控制）</p>" +
+        ps.notes.map(function (n) {
+          return "<p class='dim'>" + esc(n) + "</p>";
+        }).join("") +
         "</section>");
     }
 
