@@ -274,12 +274,12 @@ def delete_upload(path_str: str) -> Optional[str]:
     base = UPLOADS_DIR.resolve()
     try:
         target = Path(path_str).expanduser().resolve()
-    except OSError:
+    except (OSError, RuntimeError):
         return None
     if target.parent != base or target.suffix != ".jsonl" or not target.is_file():
         return None
     stored = target.name
-    target.unlink()
+    target.unlink(missing_ok=True)
     manifest = load_upload_manifest()
     if manifest.pop(stored, None) is not None:
         _save_manifest(manifest)
@@ -1188,6 +1188,8 @@ class Handler(BaseHTTPRequestHandler):
             except UploadRejected as exc:
                 self._send_json(
                     400, {"error": "not an analyzable session file: %s" % exc})
+            except OSError as exc:
+                self._send_json(500, {"error": "storing upload failed: %s" % exc})
             return
         if parsed.path != "/api/audit":
             self._send_json(404, {"error": "not found"})

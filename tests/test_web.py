@@ -1235,6 +1235,16 @@ class UploadRouteTests(unittest.TestCase):
         self.assertEqual(ctx.exception.code, 400)
         self.assertEqual(list(web.UPLOADS_DIR.glob("*.jsonl")), [])
 
+    def test_oversized_upload_is_rejected_with_413(self):
+        with patch.object(web, "MAX_UPLOAD_BYTES", 8):
+            request = urllib.request.Request(
+                self.base + "/api/upload?name=big.jsonl",
+                data=qoder_transcript_text().encode("utf-8"), method="POST")
+            with self.assertRaises(urllib.error.HTTPError) as ctx:
+                urllib.request.urlopen(request)
+        self.assertEqual(ctx.exception.code, 413)
+        self.assertEqual(list(web.UPLOADS_DIR.glob("*.jsonl")), [])
+
     def test_delete_removes_an_uploaded_session(self):
         request = urllib.request.Request(
             self.base + "/api/upload?name=del.jsonl",
