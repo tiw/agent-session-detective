@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import tempfile
 import threading
 import time
 import uuid
@@ -49,6 +50,13 @@ WEBAPP_DIR = Path(__file__).parent / "webapp"
 DEFAULT_ROOTS = ["~/.kimi-code/sessions", "~/.kimi/sessions", "~/.qoder/projects", "~/.codex/sessions"]
 
 CACHE_DIR = Path("~/.cache/agent-session-detective").expanduser()
+
+UPLOADS_DIR = Path("~/.local/share/agent-session-detective/uploads").expanduser()
+MAX_UPLOAD_BYTES = 1 << 30  # 1 GiB
+
+
+class UploadRejected(Exception):
+    """The payload is not an analyzable session file (bad format, no events)."""
 
 
 # --------------------------------------------------------------------------
@@ -166,6 +174,116 @@ def cached_paths() -> set:
             continue
     out.discard("")
     return out
+
+
+# --------------------------------------------------------------------------
+# uploaded sessions: user-provided transcript files, persisted under
+# UPLOADS_DIR and analyzed exactly like scanned sessions (the whole audit
+# flow keys off the file path).
+# --------------------------------------------------------------------------
+
+def _manifest_path() -> Path:
+    return UPLOADS_DIR / "uploads.json"
+
+
+def load_upload_manifest() -> Dict[str, dict]:
+    try:
+        manifest = json.loads(_manifest_path().read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return manifest if isinstance(manifest, dict) else {}
+
+
+def _save_manifest(manifest: Dict[str, dict]) -> None:
+    UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
+    _manifest_path().write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=1), encoding="utf-8")
+
+
+def _sanitize_upload_name(name: str) -> str:
+    """A filesystem-safe stem from the original filename. Path separators
+    and control characters are stripped so an upload name never escapes
+    the uploads directory."""
+    stem = Path(name.replace("\\", "/")).name
+    stem = "".join(ch for ch in stem if ch.isprintable())
+    stem = stem.rsplit(".", 1)[0].strip(" .") or "upload"
+    return stem[:120]
+
+
+def _upload_entry(stored: str) -> dict:
+    path = UPLOADS_DIR / stored
+    return {
+        "id": path.stem,
+        "path": str(path),
+        "workspace": "upload",
+        "mtime": path.stat().st_mtime,
+        "uploaded": True,
+    }
+
+
+def store_upload(body: bytes, original_name: str) -> dict:
+    """Persist one uploaded session file; returns the discovery-shaped
+    session entry plus ``dedup`` and ``bytes``.
+
+    The payload must parse through the same ``load_session`` the audit
+    flow uses — a file that yields nothing analyzable is rejected rather
+    than stored as a dead sidebar row. Same content (sha1) re-uploads map
+    to the existing file instead of a duplicate row.
+    """
+    digest = hashlib.sha1(body).hexdigest()
+    manifest = load_upload_manifest()
+    for stored, entry in manifest.items():
+        if entry.get("sha1") == digest and (UPLOADS_DIR / stored).is_file():
+            return {"session": _upload_entry(stored), "dedup": True,
+                    "bytes": len(body)}
+    with tempfile.TemporaryDirectory() as tmp:
+        probe = Path(tmp) / "probe.jsonl"
+        probe.write_bytes(body)
+        try:
+            session = load_session(probe)
+            # Zero events is dead; a file whose every record was dropped
+            # (malformed json, non-dict) is just as dead for the sidebar —
+            # only RecordDropped events means nothing analyzable survived.
+            if not session.events or all(
+                    e.type == "RecordDropped" for e in session.events):
+                raise ValueError("no events parsed")
+        except Exception as exc:
+            raise UploadRejected(str(exc)) from exc
+    UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
+    stem = _sanitize_upload_name(original_name)
+    stored = stem + ".jsonl"
+    n = 2
+    while (UPLOADS_DIR / stored).exists():
+        stored = "%s-%d.jsonl" % (stem, n)
+        n += 1
+    (UPLOADS_DIR / stored).write_bytes(body)
+    manifest[stored] = {
+        "original": Path(original_name.replace("\\", "/")).name,
+        "sha1": digest,
+        "uploaded_at": time.time(),
+        "size": len(body),
+    }
+    _save_manifest(manifest)
+    return {"session": _upload_entry(stored), "dedup": False, "bytes": len(body)}
+
+
+def delete_upload(path_str: str) -> Optional[str]:
+    """Remove one uploaded session file. Returns the stored name, or None
+    when the path is not an uploaded file (outside the uploads directory,
+    wrong suffix, or absent) — a DELETE can never touch scanned sessions."""
+    base = UPLOADS_DIR.resolve()
+    try:
+        target = Path(path_str).expanduser().resolve()
+    except OSError:
+        return None
+    if target.parent != base or target.suffix != ".jsonl" or not target.is_file():
+        return None
+    stored = target.name
+    target.unlink()
+    manifest = load_upload_manifest()
+    if manifest.pop(stored, None) is not None:
+        _save_manifest(manifest)
+    return stored
 
 
 # --------------------------------------------------------------------------

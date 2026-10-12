@@ -1088,5 +1088,81 @@ class InjectedDisclosurePayloadTests(unittest.TestCase):
         self.assertEqual(web.injected_skills_payload({}), [])
 
 
+def qoder_transcript_text():
+    record = {
+        "type": "user", "timestamp": "2026-10-10T08:00:00.000Z",
+        "uuid": "u1", "parentUuid": None, "isSidechain": False,
+        "message": {"content": [{"type": "text", "text": "hello"}]},
+    }
+    return json.dumps(record) + "\n"
+
+
+class UploadStoreTests(unittest.TestCase):
+    def setUp(self):
+        self._orig = web.UPLOADS_DIR
+        web.UPLOADS_DIR = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, web.UPLOADS_DIR, True)
+        self.addCleanup(setattr, web, "UPLOADS_DIR", self._orig)
+
+    def test_store_upload_persists_file_and_manifest(self):
+        result = web.store_upload(
+            qoder_transcript_text().encode("utf-8"),
+            "53e08e97-70ce-4aff-8647-c49b4f408d83-木晓-20261010.jsonl")
+
+        session = result["session"]
+        self.assertFalse(result["dedup"])
+        self.assertTrue(session["uploaded"])
+        self.assertEqual(session["workspace"], "upload")
+        self.assertEqual(session["id"],
+                         "53e08e97-70ce-4aff-8647-c49b4f408d83-木晓-20261010")
+        stored = Path(session["path"])
+        self.assertEqual(stored.parent, web.UPLOADS_DIR)
+        self.assertTrue(stored.is_file())
+        self.assertIn(stored.name, web.load_upload_manifest())
+
+    def test_same_content_dedupes_to_one_file(self):
+        body = qoder_transcript_text().encode("utf-8")
+        first = web.store_upload(body, "one.jsonl")
+        second = web.store_upload(body, "two.jsonl")
+
+        self.assertFalse(first["dedup"])
+        self.assertTrue(second["dedup"])
+        self.assertEqual(first["session"]["path"], second["session"]["path"])
+        self.assertEqual(len(list(web.UPLOADS_DIR.glob("*.jsonl"))), 1)
+
+    def test_upload_name_never_escapes_the_uploads_dir(self):
+        result = web.store_upload(
+            qoder_transcript_text().encode("utf-8"), "../../evil.jsonl")
+
+        stored = Path(result["session"]["path"])
+        self.assertEqual(stored.parent, web.UPLOADS_DIR)
+        self.assertEqual(stored.name, "evil.jsonl")
+        self.assertEqual(
+            list(p.name for p in web.UPLOADS_DIR.glob("*.jsonl")), ["evil.jsonl"])
+
+    def test_unparseable_payload_is_rejected_and_leaves_no_file(self):
+        with self.assertRaises(web.UploadRejected):
+            web.store_upload(b"not a session at all", "bad.jsonl")
+
+        self.assertEqual(list(web.UPLOADS_DIR.glob("*.jsonl")), [])
+
+    def test_delete_upload_removes_file_and_manifest_entry(self):
+        result = web.store_upload(
+            qoder_transcript_text().encode("utf-8"), "gone.jsonl")
+        stored = Path(result["session"]["path"])
+
+        self.assertEqual(web.delete_upload(str(stored)), "gone.jsonl")
+        self.assertFalse(stored.exists())
+        self.assertNotIn("gone.jsonl", web.load_upload_manifest())
+
+    def test_delete_upload_refuses_paths_outside_the_uploads_dir(self):
+        with tempfile.TemporaryDirectory() as elsewhere:
+            outside = Path(elsewhere) / "rollout-x.jsonl"
+            outside.write_text("{}", encoding="utf-8")
+
+            self.assertIsNone(web.delete_upload(str(outside)))
+            self.assertTrue(outside.exists())
+
+
 if __name__ == "__main__":
     unittest.main()
