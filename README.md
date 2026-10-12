@@ -2,9 +2,9 @@
 
 > 事后审计 agent 会话对 skill 的遵守情况 —— 该加载的加载了吗？什么时候加载的？本该触发却没触发的是哪些？
 
-`asd` 读取一次 agent 会话的原始日志，重建 skill 的完整生命周期（加载、上下文开销、被压缩挤出），用 LLM 反事实判断找出**本该触发却从未加载**的 skill，最后渲染成一个自包含的交互式 HTML 报告。
+`asd` 读取一次 agent 会话的原始日志，重建 skill 的完整生命周期（加载、上下文开销、被压缩挤出），用 LLM 反事实判断找出**本该触发却从未加载**的 skill，最后渲染成一个自包含的交互式 HTML 报告。除路由审计外，还覆盖 token 成本治理（含 opt-in 的账单侧通道）与实际 skill 调用树重建。
 
-支持 Kimi Code（CLI 和桌面版）、Qoder transcript 和 Codex session 三种格式。
+支持 Kimi Code（CLI 和桌面版）、Qoder transcript 和 Codex session 三种格式；Web 端也可上传别人机器导出的 transcript，与扫描到的会话同构分析。
 
 纯标准库实现，零第三方依赖。
 
@@ -44,7 +44,7 @@ asd --help
 PYTHONPATH=src python3 -m agent_session_detective --help
 ```
 
-要求 Python >= 3.9。
+要求 Python >= 3.9。跑测试：`python3 -m pytest tests`（600+ 用例，`tests/fixtures/` 含各格式会话样本）。
 
 ---
 
@@ -69,7 +69,7 @@ PYTHONPATH=src python3 -m agent_session_detective \
   ~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<id>.jsonl --no-judge
 ```
 
-省略 `session` 时，会在 Kimi 会话和 `~/.qoder/projects` 下的 Qoder transcript 中选择最近修改的一份。
+省略 `session` 时，会在 Kimi 会话、`~/.qoder/projects` 下的 Qoder transcript 和 `~/.codex/sessions` 中选取最近修改的一份。
 
 报告默认写到 `<会话目录>/skill-audit.html`；Qoder transcript 则写到同目录的 `<session>.skill-audit.html`，可用 `--out` 改。
 
@@ -88,6 +88,24 @@ PYTHONPATH=src python3 -m agent_session_detective <会话目录>
 `ASD_JUDGE_API_KEY` 为空时会回落到 `DEEPSEEK_API_KEY`（并默认 base_url / model）。没配凭据就不报错，只降级为"事实模式"。
 
 `--judge-limit N` 只判断前 N 个未消费的 skill，跑便宜的抽样。
+
+### 导出结构产物
+
+```bash
+# 审计 IR 文档 / IR 分析（JSON）与实际 skill 树（独立 HTML 页）
+PYTHONPATH=src python3 -m agent_session_detective <会话目录> \
+  --ir-out audit-ir.json --ir-analyses analyses.json --tree-out skill-tree.html
+```
+
+### 接入 Qoder 账单 / IDE 侧通道（opt-in，仅 Qoder transcript）
+
+```bash
+# billed usage：从本机 SharedClientCache 读该会话的真实计费 token
+PYTHONPATH=src python3 -m agent_session_detective <transcript>.jsonl --billed-usage
+
+# ide-db：join IDE 通道的子代理派发链，补全 skill tree
+PYTHONPATH=src python3 -m agent_session_detective <transcript>.jsonl --ide-db --tree-out tree.html
+```
 
 ### 评估指令遵循度
 
@@ -125,23 +143,25 @@ asd <会话目录> --expect "Poteto Mode,bug-fix,tdd" --gate 0.75 || echo "路�
 
 ## Web 界面
 
-`--serve` 在本地起一个 Web 应用，浏览器里扫描会话、配置并运行审计、看报告：
+`--serve` 在本地起一个 Web 应用，浏览器里扫描/上传会话、配置并运行审计、看报告：
 
 ```bash
 PYTHONPATH=src python3 -m agent_session_detective --serve          # http://127.0.0.1:8471
 PYTHONPATH=src python3 -m agent_session_detective --serve --port 9000
 ```
 
-- **会话列表**：扫描 Kimi 两个会话根、`~/.qoder/projects` 和 `~/.codex/sessions`，默认显示**最近 10 个**会话（工作区 + 时间 + 是否已审计）；侧栏搜索框按 session id / 工作区名在**全部**已发现会话里过滤（发现到的远多于 10 个，老会话靠搜索触达）。列表只做文件发现（stat 级，毫秒级），不解析日志——轮数/skill/token 统计都在你点审计那一刻才算
+- **会话列表**：扫描 Kimi 两个会话根、`~/.qoder/projects`、`~/.codex/sessions` 和本地上传目录，默认显示**最近 10 个**会话（工作区 + 时间 + 是否已审计）；侧栏搜索框按 session id / 工作区名在**全部**已发现会话里过滤（发现到的远多于 10 个，老会话靠搜索触达）。列表只做文件发现（stat 级，毫秒级），不解析日志——轮数/skill/token 统计都在你点审计那一刻才算
+- **上传 / 删除会话**：sidebar 的 upload 按钮（或直接把文件拖进来）上传 jsonl——典型是别人机器导出的 transcript；落盘到 `~/.local/share/agent-session-detective/uploads/` 后与扫描会话**完全同构**（列表、审计、报告、skill tree 一视同仁），sha1 去重（重复上传命中已有条目），行内 × 删除
 - **skill 目录**：表单里可追加任意多个 skill 目录（每行一个），用于把运行时真实可用的 skill 纳入审计范围——默认只扫 `~/.agents/skills` 和 `~/.kimi/skills`，harness 内置的 plugin skill 大多不在其中。输入时会实时显示每个目录贡献了多少 skill、目录是否存在（同名的按版本去重）。用户提供的目录会**递归**查找（plugin cache 是 `<vendor>/<plugin>/<version>/SKILL.md` 的嵌套布局），默认目录仍走一层 glob
 - **skill 原文注入**：表单里直接粘 JSON，手工提供 skill 的真实原文。同名条目**覆盖** catalog 里的解析结果（提供原文的目的就是纠正它），catalog 里没有的直接新增——这是把 harness 内置 skill 纳入审计的手段。`intent` 字段是你对「这个 skill 干什么」的说法，会给 judge 做参考，但报告里始终标注为人工提供，不会冒充日志事实。粘贴时即时校验：JSON 语法错误会当场提示，条目缺 `description` 且无 `body_path` 会被标出来（那类条目会被跳过）。命令行等价物是 `--injected PATH`
 - **catalog audit**：右上角按钮，**离线静态体检 skill catalog 本身**——不需要会话日志、不调用 LLM、不需要任何凭据，点一下就出四块结论：**体量分级**（激活一个 skill 要付多少 token，按 token 排序，超标的置顶）、**description 质量**（路由文案是否冗余/过短/根本没解析出来）、**分层有效性比值**（discovery 常驻 vs activation 潜在，量化「渐进式披露」这套机制本身划不划算）、**解析健康度**（哪些 skill 会因为缺路由依据而被误判）。表单里的 skill 目录和注入原文对它同样生效。**它和会话行为审计是两回事**：体检只说 catalog 的成本与缺陷，不评价 agent 表现，两份报告不合并成一个分数。阈值是经验值（500 行 / 300 字符），不是规范要求，命令行可覆盖
-- **fleet 汇总**：侧栏 `fleet` 按钮按需触发，跨会话聚合（会话数、平均轮数、平均缓存命中率、增长形状分布、重复注入总量）——「纠规则不纠个案」的入口；要解析全部日志，约 10 秒，期间页面可继续操作
-- **审计表单**：填 `--expect` 清单、选 playbook 做 IF 评估、勾选是否跑 missed-trigger 判定（LLM 部分后台线程执行，页面轮询进度）
-- **报告渲染**：expectations 核对表、findings、IF 逐步判定、skill 生命周期、事件流，与 CLI 版同一套数据形状
+- **fleet 汇总**：侧栏 `fleet` 按钮按需触发，跨会话聚合（会话数、平均轮数、平均缓存命中率、增长形状分布、重复注入总量（按分类））——「纠规则不纠个案」的入口；要解析全部日志，约 10 秒，期间页面可继续操作
+- **审计表单**：填 `--expect` 清单、选 playbook 做 IF 评估、勾选是否跑 missed-trigger 判定与是否接 billed usage 账单侧通道（LLM 部分后台线程执行，页面轮询进度）
+- **报告渲染**：expectations 核对表、findings、IF 逐步判定、skill 生命周期、事件流，与 CLI 版同一套数据形状；另多渲染 **bill 成本卡**（EST 小计 + 路由摘要 + 可选 billed 块 + 子代理返回台账）
+- **skill tree**：右上角 `skill tree` 打开该会话的实际调用树独立页（agents → dispatch → skill loads），orphan 派发可接 IDE DB join 补全
 - **事件流角色 badge**：每条事件标注 `user` / `think` / `say` / `tool` / `result` / `compact`，人的输入、模型思考、模型回复、工具 traffic 一眼分开
 
-JSON API 也可以独立使用（`GET /api/sessions?q=<关键词>`（无 `q` 时最近 10 个，带 `q` 时在全部已发现会话里按 id/工作区名过滤、最多 50 条，纯发现）、`GET /api/fleet`（按需全量聚合，慢）、`POST /api/scan-dirs`（预览每个目录贡献多少 skill）、`POST /api/catalog-audit`（离线静态体检，同 CLI 的 `catalog-audit`）、`POST /api/audit`、`GET /api/job/<id>`、`GET /api/playbooks`），方便接进自己的工具链。
+JSON API 也可以独立使用（`GET /api/sessions?q=<关键词>`（无 `q` 时最近 10 个，带 `q` 时在全部已发现会话里按 id/工作区名过滤、最多 50 条，纯发现）、`GET /api/fleet`（按需全量聚合，慢）、`POST /api/scan-dirs`（预览每个目录贡献多少 skill）、`POST /api/catalog-audit`（离线静态体检，同 CLI 的 `catalog-audit`）、`POST /api/audit`、`GET /api/job/<id>`、`GET /api/playbooks`、`POST /api/upload` 与 `DELETE /api/upload`（上传/删除会话文件）、`GET /api/tree?path=...&billed=1&ide_db=1`（skill 树页）），方便接进自己的工具链。
 
 > ⚠️ 服务无鉴权，只绑定 `127.0.0.1`，不要暴露到公网。
 
@@ -155,7 +175,9 @@ JSON API 也可以独立使用（`GET /api/sessions?q=<关键词>`（无 `q` 时
 | **expectations** | 按路由规则该被消费的 skill 清单 | `loaded` = 经 Skill 工具正式加载；`file-read` = SKILL.md 被当文件读过（kimi-code 下是绕过机制，codex 下是正规方式，**harness 相对**）；`missing` = 都没有，路由没走的第一信号 |
 | **findings** | 本该触发却从未加载的 skill | 判定是 LLM 反事实推理（**判断**）；证据是从会话原文的逐字引用（**可核对的事实**）。无证据或证据非原文的判定被丢弃计为工具缺陷——缺陷多时先怀疑解析器，别急着怀疑 agent |
 | **instruction following** | 所选 playbook 每个编号步骤的执行判定 | `covered` = 轨迹里有实际行动/结果；`partial` = 做了一部分；`skipped` = 未执行。**带 skip 理由也计 skipped**——这轴度量步骤执行度，不度量裁量合规（那看 expectations）。覆盖率由判定重算，不信模型自报 |
-| **token governance** | 第 0 步审计的四指标 | 缓存命中率（usage 记录，全 agent 合计）；每轮增量形状（linear / sublinear / accelerating）；六桶分解（**system 桶是残差，标注推断**；`skill` 技能正文与 `inject` harness 包裹进你输入里的内容单独成桶，`tool` 只装其余工具结果；其余按事件内容估计）；prompt 哈希翻转（hash 变化是日志事实，「缓存失效」是标注的推断）。附重复注入检测：同一份工具结果被多次读入 ≈ 状态未外置 |
+| **token governance** | 第 0 步审计的四指标 | 缓存命中率（usage 记录，全 agent 合计）；每轮增量形状（linear / sublinear / accelerating）；六桶分解（**system 桶是残差，标注推断**；`skill` 技能正文与 `inject` harness 包裹进你输入里的内容单独成桶，`tool` 只装其余工具结果；其余按事件内容估计）；prompt 哈希翻转（hash 变化是日志事实，「缓存失效」是标注的推断）。附重复注入检测与分类：同一份工具结果被多次读入 ≈ 状态未外置；重复税按来源分类（压缩协议内重读 / 轮询 / 非压缩期 / 未分类） |
+| **bill**（web 报告） | 本次会话的成本与路由 | EST 小计（上下文增长 / 重复税 / skill 加载 / 子代理返回四行）+ routing 摘要（expectations 命中、IF、judge 状态）+ 可选 billed 块（会话级账单口径，**永不与 EST 混算**；无证据的行显示 unavailable 而非 0）。超 2000 EST token 的子代理返回标为「size」进返回台账 |
+| **skill loads (evidence-backed)** | 证据背书的加载台账 | 每次加载 / 重载 / 不可用一行，含通道与 EST 成本（来自审计 IR） |
 | **skill lifecycle** | 每次加载/直读的完整记录 | 展开可见**加载时捕获的内容快照**（之后 skill 文件改了也不影响本报告）；`evicted?` = 压缩后可能被挤出上下文（**推断**，日志从不记录这件事）。声明了 `disable-model-invocation` 的 skill 会带核对提示：日志无法区分点名与自调 |
 | **event feed** | 原始事件流（最近 400 条） | 角色 badge：`user` 人的输入、`think` 模型思考、`say` 模型回复、`tool` 调用、`result` 返回、`compact` 压缩；`[subagent:x]` 表示来自子代理 |
 
@@ -165,10 +187,17 @@ JSON API 也可以独立使用（`GET /api/sessions?q=<关键词>`（无 `q` 时
 
 | 参数 | 说明 |
 |---|---|
-| `session` | Kimi 会话目录（含 `wire.jsonl`）或 Qoder transcript（`~/.qoder/projects/<workspace>/<session>.jsonl`）。省略则自动找最近一个 |
+| `session` | Kimi 会话目录（含 `wire.jsonl`）、Qoder transcript 或 Codex rollout（`.jsonl`）。省略则自动找最近一个 |
 | `--sessions-root` | 自动定位最近 Kimi 会话时的根目录，默认 `~/.kimi/sessions` |
 | `--skills-dir` | 追加 skill 目录到 catalog，可重复。用户提供的目录递归查找（plugin cache 是嵌套布局），默认目录走一层 glob |
 | `--out` | 报告输出路径，默认 Kimi 的 `<会话目录>/skill-audit.html` 或 Qoder 的 `<session>.skill-audit.html` |
+| `--ir-out` | 把本次审计的 IR 文档（含证据台账）写成 JSON |
+| `--ir-analyses` | 导出 IR 分析 JSON：skill_audit / context_organization / redundancy / skill_loads / dispatches / skill_tree |
+| `--tree-out` | 渲染实际 skill 树（agents → dispatch → skill loads）为独立 HTML 页 |
+| `--billed-usage` | opt-in：从本机 SharedClientCache DB 读该会话的账单 token（仅 Qoder transcript） |
+| `--billed-db` | 账单 DB 路径（默认 Qoder SharedClientCache local.db） |
+| `--ide-db` | opt-in：join IDE 通道的子代理派发链（仅 Qoder transcript） |
+| `--ide-db-path` | IDE 子代理 DB 路径（默认同上） |
 | `--open` | 生成后直接用浏览器打开 |
 | `--no-judge` | 只出事实，跳过 LLM 判断 |
 | `--expect` | 逗号分隔的预期 skill 名，渲染成命中/缺失清单 |
@@ -214,11 +243,11 @@ asd catalog-audit --max-lines 800          # 覆盖约定阈值
 |---|---|---|
 | **CLI**（protocol 1.9） | `<session>/wire.jsonl` | `<session>/subagents/<id>/wire.jsonl` |
 | **桌面版**（protocol 1.5） | `<session>/agents/main/wire.jsonl` | `<session>/agents/agent-*/wire.jsonl` |
-| **Qoder transcript** | `~/.qoder/projects/<workspace>/<session>.jsonl` | 不适用 |
+| **Qoder transcript** | `~/.qoder/projects/<workspace>/<session>.jsonl` | 内联 sidechain（IR 1.8 起按 `parent_tool_use_id` join 进派发链） |
 
 桌面版记录（`turn.prompt`、`context.append_loop_event`、`token_counting.measured`、`token_counting.turn_recorded`、`usage.record`、`llm.request`）会被翻译成 CLI 格式对应的事件类型；子代理里加载的 skill 会归因到父会话的时间线上。缓存与输出 token 两种格式都有：桌面版在 `usage.record`，CLI 版在 `StatusUpdate.token_usage`；prompt 前缀稳定性（`systemPromptHash`/`toolsHash`）只有桌面版记录。
 
-Qoder transcript 支持提取对话、工具和 skill 事实，以及其中存在的 usage 记录；上下文测量、压缩事件和 prompt/tool 哈希在该格式中不可用，报告会显示为不可用，不会用推断值替代。
+Qoder transcript 支持提取对话、工具和 skill 事实，以及其中存在的 usage 记录；上下文测量、压缩事件和 prompt/tool 哈希在该格式中不可用，报告会显示为不可用，不会用推断值替代。terminal CLI 落盘的 transcript 经会话发现收编后可降级审计（telemetry 薄镜像）；web 上传的 jsonl（别人机器导出）通常正是内联 sidechain 形状，与扫描会话同构解析。
 
 Codex session 支持提取对话、工具调用、推理摘要和 token usage 记录；上下文测量、压缩事件和 prompt/tool 哈希在该格式中不可用，报告会显示为不可用，不会用推断值替代。
 
@@ -241,13 +270,17 @@ skill 的识别有两条独立路径，报告里分开呈现：
 | **Findings** | 本该触发却没触发的 skill，每条带决策点、轮次、置信度、逐字证据 |
 | **Instruction Following** | `--steps` 的逐步判定表 + 覆盖率 + PASS/FAIL |
 | **SKILL.md Read as Plain Files** | 绕过 Skill 机制的直读记录 |
+| **Skill Loads (evidence-backed)** | 证据背书的加载台账：加载 / 重载 / 不可用，含通道与 EST 成本（来自审计 IR） |
 | **Skill Lifecycle** | 每次加载：内容快照、token 估计、加载后的上下文占用、是否可能被压缩挤出 |
 | **Compactions** | 压缩事件起止时间 |
 | **Context Usage** | 上下文 token 占用的折线图（内联 SVG） |
-| **Token Governance** | 缓存命中率、每轮增量形状判定、六桶分解堆叠图（system 桶为残差推断）、prompt 哈希翻转表、重复注入检测 |
+| **Token Governance** | 缓存命中率、每轮增量形状判定、六桶分解堆叠图（system 桶为残差推断）、prompt 哈希翻转表、重复注入检测与分类 |
+| **Supplied Skill Text** | 手工注入的 skill 原文（用了 `--injected` 时出现；标注为人工提供，不冒充日志事实） |
 | **Event Feed** | 原始事件流，每条带时间戳和来源 |
 
 skill 展示的是**加载时捕获的内容快照**——所以即使 skill 文件后来被改了，报告仍然准确。
+
+Web 报告在此之上额外渲染 **bill 成本卡**（EST 小计 + routing 摘要 + 可选 billed 块 + 子代理返回台账）；**skill tree** 是独立页面：CLI 用 `--tree-out` 生成，web 点右上角 `skill tree`。
 
 ---
 
@@ -259,18 +292,27 @@ skill 展示的是**加载时捕获的内容快照**——所以即使 skill 文
 ├── docs/
 │   ├── brainstorms/
 │   │   └── 2026-09-29-agent-skill-audit-requirements.md   # 需求与设计决策
+│   ├── calibration.md                                     # 活体 /context 快照对 IR 估算器的标定流程
+│   ├── qoder-transcript-shape.md                          # 三种落盘格式的形状参考
 │   └── poteto-mode-test-plan.md                           # 靶场测试方案与轮次记录
+├── tests/                                                 # pytest，600+ 用例
 └── src/agent_session_detective/
-    ├── cli.py        # 命令行入口、参数、退出码
-    ├── wire.py       # 日志解析（两种格式 → 统一 Event）
-    ├── timeline.py   # 事实时间线：加载、直读、压缩、token 序列
-    ├── tokenstats.py # token 治理统计：缓存、增长形状、六桶、哈希翻转、重复注入
-    ├── catalog.py    # 扫描本地 skill 目录，提取触发语料
-    ├── judge.py      # 反事实触发判断
-    ├── if_eval.py    # 指令遵循度评估（移植自 AWS Skill Eval）
-    ├── report.py     # HTML 渲染
-    ├── web.py        # Web 应用：JSON API + 审计任务队列
-    └── webapp/       # 单页 UI（index.html / style.css / app.js）
+    ├── cli.py         # 命令行入口、参数、退出码
+    ├── wire.py        # 日志解析（各格式 → 统一 Event）
+    ├── timeline.py    # 事实时间线：加载、直读、压缩、token 序列
+    ├── tokenstats.py  # token 治理统计：缓存、增长形状、六桶、哈希翻转、重复注入分类
+    ├── catalog.py     # 扫描本地 skill 目录，提取触发语料
+    ├── catalog_audit.py # 离线静态体检（体量 / 描述 / 分层 / 解析）
+    ├── judge.py       # 反事实触发判断
+    ├── if_eval.py     # 指令遵循度评估（移植自 AWS Skill Eval）
+    ├── billing.py     # 账单侧通道：SharedClientCache 只读 reader
+    ├── ide_db.py      # IDE 通道子代理链 join
+    ├── bill.py        # bill 成本摘要（web 报告）
+    ├── ir/            # 审计中间表示：AuditDocument、证据台账与分析
+    ├── report.py      # HTML 渲染
+    ├── tree_html.py   # 实际 skill 树独立页
+    ├── web.py         # Web 应用：JSON API + 审计任务队列 + 上传存储
+    └── webapp/        # 单页 UI（index.html / style.css / app.js）
 ```
 
 skill catalog 从 `~/.agents/skills` 和 `~/.kimi/skills` 扫描，可用 `--skills-dir` 追加（web 表单的「skill 目录」栏是同一个入口）。目录解析按 skill 名去重，所以版本化的 plugin cache 里同一个 skill 有多个版本时只保留一个。
@@ -281,12 +323,11 @@ skill catalog 从 `~/.agents/skills` 和 `~/.kimi/skills` 扫描，可用 `--ski
 
 - **只读日志，不插桩**——历史会话可审计，但精度受限于日志本身记录了什么。日志不记录"skill 被丢弃"，所以挤出只能标注为推断。
 - **支持 Kimi Code 的两种格式、Qoder transcript 和 Codex session**。Claude Code 和框架无关的中间格式未实现。
-- **跨会话只有轻量 fleet 聚合**（web 会话列表上方的汇总条），不做趋势存储和历史对比；一次深度审计仍然只针对一个会话。
+- **跨会话只有轻量 fleet 聚合**（web 侧栏的 `fleet` 面板），不做趋势存储和历史对比；一次深度审计仍然只针对一个会话。
 - **"加载了但没遵守"是独立的一条轴**：`--steps` 的分数衡量的是"规定动作执行度"，被 playbook 明文授权、带 `skip: <原因>` 的跳过**仍然计 0 分**。这是有意的——判断遵守度需要 `--steps` 评分和 `--expect` 清单两个轴一起看。
 - **`if_eval` 的步骤解析比较挑格式**：只认顶格的 `N. ` 编号行，缩进续行会被拼接。
 - **`--judge-limit` 按 catalog 顺序截断**，落到哪批 skill 上不稳定。
-- **Web 服务只绑定 localhost、无鉴权**，不适合共享或暴露；审计任务存在内存里，重启即失。
-- 仓库目前**没有自动化测试**。
+- **Web 服务只绑定 localhost、无鉴权**，不适合共享或暴露；审计任务存在内存里，重启即失（上传的会话文件持久化，不受影响）。
 
 ---
 
@@ -306,6 +347,29 @@ skill catalog 从 `~/.agents/skills` 和 `~/.kimi/skills` 扫描，可用 `--ski
 | 21:46 | **IR 1.3：操作者原话进 IR**，按干预形式（intervention form）分类标注——新增 `ir/intervention.py` |
 | 跨零点 | **billed usage 实现**（10-10 凌晨 00:06–00:19）：IR 加 `BilledUsage` 可选后置字段；`billing.py` 只读 SharedClientCache reader（uuid join）；CLI `--billed-usage` / `--billed-db`；tree 页 header 渲染账单块；`GET /api/tree?billed=1` |
 
+### 2026-10-10
+
+| 时间 | 内容 |
+|---|---|
+| 11:03–11:40 | **重复注入分类**：compaction 窗口分类（区别于真冗余）、重复税按类进 web payload（缓存指纹 v9）与 fleet rollup |
+| 12:01–14:57 | **IR 1.7：IDE DB 子代理链**——AES 解密阶梯、`attach_ide_db`、CLI `--ide-db` / `--ide-db-path`、`GET /api/tree?ide_db=1`、orphan 派发的 join 提示 |
+| 14:03 | **每轮增长由账单序列重建**（billed prompt 序列 → growth 柱状图） |
+| 16:06–18:45 | **P0-1 bill 摘要卡**：`bill.py` 纯函数 + web 报告 bill 卡（EST 小计 / routing / billed 块 / 子代理返回台账）；侧栏会话搜索 |
+
+### 2026-10-11
+
+| 时间 | 内容 |
+|---|---|
+| 19:12 | **外部 skill 纳入审计**：`--skills-dir` 用户目录 + `--injected` 手工注入 skill 原文，报告区分「人工提供 / 日志记录」 |
+| 20:33 | **`asd catalog-audit`**：离线静态体检（CLI + web 面板），零 LLM、不需要会话日志 |
+
+### 2026-10-12
+
+| 时间 | 内容 |
+|---|---|
+| 11:46–11:53 | **IR 1.8：内联 sidechain join**——读取 snake_case `parent_tool_use_id`，上传文件形状的 dispatch 不再 orphan |
+| 12:25–13:12 | **Web 上传会话**：`POST /api/upload` + sha1 去重清单 + sidebar 拖拽上传与行内删除 |
+
 设计文档见 `docs/superpowers/specs/`，实现计划见 `docs/superpowers/plans/`。
 
 ---
@@ -313,4 +377,6 @@ skill catalog 从 `~/.agents/skills` 和 `~/.kimi/skills` 扫描，可用 `--ski
 ## 相关文档
 
 - [需求与设计决策](docs/brainstorms/2026-09-29-agent-skill-audit-requirements.md) —— 为什么这样设计、v1 边界在哪
+- [Qoder transcript 形状参考](docs/qoder-transcript-shape.md) —— 三种落盘格式的形状、遥测与薄镜像对照
+- [IR 估算器标定流程](docs/calibration.md) —— 用活体 /context 快照校验离线估算器（手工流程，不进 CI）
 - [poteto-mode 路由合规测试方案](docs/poteto-mode-test-plan.md) —— 用靶场应用验证 agent 是否按路由规则加载 skill，含 T1–T4 用例与轮次结论
