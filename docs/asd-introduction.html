@@ -1,0 +1,952 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent Session Detective — 问题 · 思路 · 能力 · 解题</title>
+<script>
+(function () {
+  try {
+    var t = localStorage.getItem('asd-doc-theme');
+    if (t === 'dark' || (!t && matchMedia('(prefers-color-scheme: dark)').matches)) {
+      document.documentElement.classList.add('dark');
+    }
+  } catch (e) {}
+})();
+</script>
+<style>
+  :root {
+    --bg:      #FAF9F5;
+    --panel:   #FFFFFF;
+    --slate:   #141413;
+    --text:    #3D3D3A;
+    --muted:   #87867F;
+    --border:  #D1CFC5;
+    --wash:    #F0EEE6;
+    --clay:    #D97757;
+    --olive:   #788C5D;
+    --rust:    #B04A3F;
+    --sky:     #6A8CAF;
+    --edge:    #A5A29A;
+    --serif: ui-serif, Georgia, "Times New Roman", serif;
+    --sans:  system-ui, -apple-system, "PingFang SC", "Segoe UI", Roboto, sans-serif;
+    --mono:  ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  html.dark {
+    --bg:      #191817;
+    --panel:   #201F1C;
+    --slate:   #EDEAE2;
+    --text:    #C9C6BC;
+    --muted:   #8F8C84;
+    --border:  #3A3831;
+    --wash:    #262522;
+    --clay:    #E08A68;
+    --olive:   #8FA372;
+    --rust:    #D06A5E;
+    --sky:     #8AABC8;
+    --edge:    #5E5C55;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 15px;
+    line-height: 1.75;
+    -webkit-font-smoothing: antialiased;
+    padding: 56px 24px 120px;
+  }
+  .sheet { max-width: 1080px; margin: 0 auto; }
+  .wide { max-width: 1240px; margin: 0 auto; }
+
+  /* theme toggle */
+  .theme-toggle {
+    position: fixed; top: 16px; right: 16px; z-index: 20;
+    appearance: none; cursor: pointer;
+    border: 1.5px solid var(--border); border-radius: 8px;
+    background: var(--panel); color: var(--text);
+    font-family: var(--mono); font-size: 11px;
+    padding: 6px 10px;
+  }
+  .theme-toggle:hover { border-color: var(--clay); color: var(--clay); }
+
+  /* header */
+  header { margin-bottom: 44px; }
+  .eyebrow {
+    font-family: var(--mono); font-size: 11px;
+    letter-spacing: 0.08em; text-transform: uppercase;
+    color: var(--muted); margin-bottom: 10px;
+  }
+  h1 {
+    font-family: var(--serif); font-weight: 500;
+    font-size: 33px; color: var(--slate);
+    letter-spacing: -0.01em; margin-bottom: 12px;
+  }
+  .lead { font-size: 14.5px; max-width: 720px; }
+  .lead code, p code, td code, li code, dd code, aside code {
+    font-family: var(--mono); font-size: 12.5px;
+    background: var(--wash); border: 1px solid var(--border);
+    border-radius: 4px; padding: 1px 5px;
+  }
+
+  h2 {
+    font-family: var(--serif); font-weight: 500;
+    font-size: 23px; color: var(--slate);
+    margin: 52px 0 14px;
+  }
+  h3 {
+    font-size: 15.5px; color: var(--slate);
+    margin: 26px 0 8px;
+  }
+  p { margin-bottom: 12px; max-width: 760px; }
+  .sec-intro { color: var(--muted); font-size: 13.5px; margin-bottom: 18px; max-width: 760px; }
+
+  .tag {
+    display: inline-block; font-family: var(--mono); font-size: 10px;
+    letter-spacing: 0.06em; text-transform: uppercase;
+    border-radius: 4px; padding: 1px 7px; margin-right: 8px;
+    vertical-align: 2px;
+  }
+  .tag.p { background: color-mix(in srgb, var(--rust) 14%, var(--panel)); color: var(--rust); }
+  .tag.a { background: color-mix(in srgb, var(--clay) 14%, var(--panel)); color: var(--clay); }
+  .tag.c { background: color-mix(in srgb, var(--sky) 16%, var(--panel)); color: var(--sky); }
+  .tag.o { background: color-mix(in srgb, var(--olive) 16%, var(--panel)); color: var(--olive); }
+
+  .callout {
+    border: 1.5px solid var(--clay);
+    background: color-mix(in srgb, var(--clay) 7%, var(--panel));
+    border-radius: 12px;
+    padding: 18px 22px;
+    margin: 16px 0 10px;
+    max-width: 760px;
+    font-size: 15.5px;
+    color: var(--slate);
+  }
+
+  /* ── map section ─────────────────────── */
+  .map-layout {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 300px;
+    gap: 24px;
+    align-items: start;
+    margin-top: 14px;
+  }
+  @media (max-width: 1080px) { .map-layout { grid-template-columns: 1fr; } }
+
+  .canvas {
+    border: 1.5px solid var(--border);
+    border-radius: 14px;
+    background: var(--panel);
+    padding: 20px 16px 14px;
+    overflow-x: auto;
+  }
+  svg.flow { display: block; width: 100%; min-width: 880px; height: auto; }
+
+  svg.flow text { font-family: var(--sans); pointer-events: none; }
+  svg.flow .colhead {
+    font-family: var(--mono); font-size: 11px; letter-spacing: 0.06em;
+    fill: var(--muted);
+  }
+  svg.flow .badge  { font-family: var(--mono); font-size: 9px; fill: var(--muted); }
+  svg.flow .title  { font-size: 13px; font-weight: 600; fill: var(--slate); }
+  svg.flow .sub    { font-size: 10.5px; fill: var(--muted); }
+
+  .node { cursor: pointer; transition: opacity 160ms ease; }
+  .node rect {
+    fill: var(--panel);
+    stroke: var(--border); stroke-width: 1.5; rx: 10;
+  }
+  .node.p rect { fill: color-mix(in srgb, var(--rust) 8%,  var(--panel)); stroke: var(--rust); }
+  .node.a rect { fill: color-mix(in srgb, var(--clay) 8%,  var(--panel)); stroke: var(--clay); }
+  .node.c rect { fill: color-mix(in srgb, var(--sky) 10%,  var(--panel)); stroke: var(--sky); }
+  .node.o rect { fill: color-mix(in srgb, var(--olive) 10%, var(--panel)); stroke: var(--olive); }
+  .node:hover rect { stroke-width: 2.2; }
+  .node.active rect { stroke: var(--clay); stroke-width: 2.4; }
+  .node.dimmed, .edge.dimmed { opacity: 0.14; }
+
+  .edge {
+    stroke: var(--edge); stroke-width: 1.4; fill: none;
+    opacity: 0.34;
+    marker-end: url(#arrow);
+    transition: opacity 160ms ease, stroke 160ms ease;
+  }
+  .edge.hl {
+    stroke: var(--clay); stroke-width: 2.4; opacity: 1;
+    marker-end: url(#arrow-clay);
+  }
+
+  .legend {
+    display: flex; flex-wrap: wrap; gap: 16px 22px;
+    margin-top: 14px; font-size: 12.5px; color: var(--text);
+    align-items: center;
+  }
+  .legend span { display: inline-flex; align-items: center; gap: 7px; }
+  .chip { width: 20px; height: 13px; border: 1.5px solid; border-radius: 4px; }
+  .chip.p { border-color: var(--rust); background: color-mix(in srgb, var(--rust) 10%, var(--panel)); }
+  .chip.a { border-color: var(--clay); background: color-mix(in srgb, var(--clay) 10%, var(--panel)); }
+  .chip.c { border-color: var(--sky);  background: color-mix(in srgb, var(--sky) 12%, var(--panel)); }
+  .chip.o { border-color: var(--olive); background: color-mix(in srgb, var(--olive) 12%, var(--panel)); }
+  .legend .hint-line { color: var(--muted); }
+
+  aside.panel {
+    position: sticky; top: 24px;
+    border: 1.5px solid var(--border);
+    border-radius: 14px;
+    background: var(--panel);
+    padding: 18px 18px 20px;
+  }
+  aside.panel .hint { font-size: 12px; color: var(--muted); margin-bottom: 12px; }
+  aside.panel h3 {
+    font-family: var(--serif); font-weight: 500; font-size: 19px;
+    margin: 0 0 6px; color: var(--slate);
+  }
+  aside.panel .meta {
+    font-family: var(--mono); font-size: 10.5px; color: var(--muted);
+    margin-bottom: 12px; text-transform: uppercase; letter-spacing: 0.05em;
+  }
+  aside.panel p { font-size: 13px; line-height: 1.65; margin-bottom: 12px; max-width: none; }
+  aside.panel pre {
+    font-family: var(--mono); font-size: 11px; line-height: 1.55;
+    background: var(--wash); border: 1px solid var(--border);
+    border-radius: 8px; padding: 9px 11px;
+    white-space: pre-wrap; word-break: break-all;
+    color: var(--slate);
+  }
+  aside.panel button {
+    appearance: none; cursor: pointer; margin-top: 12px;
+    border: 1.5px solid var(--border); border-radius: 6px;
+    background: var(--wash); color: var(--text);
+    font-family: var(--mono); font-size: 11px; padding: 5px 10px;
+  }
+  aside.panel button:hover { border-color: var(--clay); color: var(--clay); }
+
+  /* ── tables ──────────────────────────── */
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    font-size: 13.5px;
+    margin: 14px 0 6px;
+    line-height: 1.6;
+  }
+  th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th {
+    font-family: var(--mono); font-size: 10.5px; text-transform: uppercase;
+    letter-spacing: 0.06em; color: var(--muted); font-weight: 500;
+    white-space: nowrap;
+  }
+  td.k { color: var(--slate); font-weight: 600; white-space: nowrap; }
+  td.mod { font-family: var(--mono); font-size: 12px; color: var(--slate); }
+
+  ul.plain { margin: 8px 0 14px 20px; max-width: 760px; }
+  ul.plain li { margin-bottom: 7px; }
+
+  details.glossary {
+    border: 1.5px solid var(--border); border-radius: 12px;
+    background: var(--panel); padding: 14px 20px; margin-top: 18px;
+    max-width: 860px;
+  }
+  details.glossary summary { cursor: pointer; font-family: var(--mono); font-size: 12px; color: var(--muted); }
+  details.glossary dl { margin-top: 14px; display: grid; grid-template-columns: 170px 1fr; row-gap: 10px; column-gap: 18px; }
+  details.glossary dt { font-weight: 600; color: var(--slate); font-size: 13.5px; }
+  details.glossary dd { font-size: 13px; color: var(--text); }
+  @media (max-width: 760px) { details.glossary dl { grid-template-columns: 1fr; } }
+
+  footer {
+    margin-top: 64px; padding-top: 16px;
+    border-top: 1px solid var(--border);
+    font-family: var(--mono); font-size: 11px; color: var(--muted);
+  }
+</style>
+</head>
+<body>
+<button class="theme-toggle" id="themeToggle">◐ theme</button>
+
+<div class="wide">
+
+<header>
+  <div class="eyebrow">Project Overview · 2026-10</div>
+  <h1>Agent Session Detective</h1>
+  <p class="lead">
+    事后审计 agent 会话对 skill 的遵守情况与 token 成本结构：该加载的加载了吗？什么时候加载的？
+    本该触发却没触发的是哪些？token 花在哪了？<code>asd</code> 只读一次原始日志，不插桩、纯标准库，
+    把确定性事实与 LLM 判断分开交付成一份可复核的报告。本页按
+    <b>要解决的问题 → 解题思路 → 能力建设 → 能力如何解决问题</b> 四层展开，顶部关系图供整体 review。
+  </p>
+</header>
+
+<!-- ═══════════ 关系图 ═══════════ -->
+<section id="map">
+  <h2>总览关系图</h2>
+  <p class="sec-intro">
+    左→右四列：观察到的问题，经解题原则的约束，落成具体能力，组合成交付物。
+    点击任意节点，高亮它在整条链路上的位置（含上游来源与下游去向），右侧面板给出该节点的展开说明。
+  </p>
+
+  <div class="map-layout">
+    <div>
+      <div class="canvas">
+        <svg class="flow" viewBox="0 0 1240 745">
+          <defs>
+            <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+              <path d="M0,0 L10,5 L0,10 z" fill="var(--edge)"/>
+            </marker>
+            <marker id="arrow-clay" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+              <path d="M0,0 L10,5 L0,10 z" fill="var(--clay)"/>
+            </marker>
+          </defs>
+
+          <!-- column heads -->
+          <text class="colhead" x="148"  y="42" text-anchor="middle">① 问题 · 要解决的问题</text>
+          <text class="colhead" x="460"  y="42" text-anchor="middle">② 思路 · 解题原则</text>
+          <text class="colhead" x="804"  y="42" text-anchor="middle">③ 能力 · 建设的模块</text>
+          <text class="colhead" x="1112" y="42" text-anchor="middle">④ 解题 · 交付物</text>
+
+          <!-- edges: P→A -->
+          <path class="edge" data-e="P1-A2" d="M272,128 C312,128 296,260 336,260"/>
+          <path class="edge" data-e="P1-A3" d="M272,128 C312,128 296,392 336,392"/>
+          <path class="edge" data-e="P2-A1" d="M272,260 C312,260 296,128 336,128"/>
+          <path class="edge" data-e="P2-A4" d="M272,260 C312,260 296,524 336,524"/>
+          <path class="edge" data-e="P3-A2" d="M272,392 C312,392 296,260 336,260"/>
+          <path class="edge" data-e="P3-A5" d="M272,392 C312,392 296,656 336,656"/>
+          <path class="edge" data-e="P4-A4" d="M272,524 C312,524 296,524 336,524"/>
+          <path class="edge" data-e="P5-A1" d="M272,656 C312,656 296,128 336,128"/>
+          <!-- edges: A→C -->
+          <path class="edge" data-e="A1-C1" d="M584,128 C624,128 616,120 656,120"/>
+          <path class="edge" data-e="A1-C2" d="M584,128 C624,128 616,233 656,233"/>
+          <path class="edge" data-e="A1-C5" d="M584,128 C624,128 616,572 656,572"/>
+          <path class="edge" data-e="A2-C3" d="M584,260 C624,260 616,346 656,346"/>
+          <path class="edge" data-e="A2-C4" d="M584,260 C624,260 616,459 656,459"/>
+          <path class="edge" data-e="A3-C4" d="M584,392 C624,392 616,459 656,459"/>
+          <path class="edge" data-e="A4-C1" d="M584,524 C624,524 616,120 656,120"/>
+          <path class="edge" data-e="A4-C3" d="M584,524 C624,524 616,346 656,346"/>
+          <path class="edge" data-e="A5-C4" d="M584,656 C624,656 616,459 656,459"/>
+          <path class="edge" data-e="A5-C6" d="M584,656 C624,656 616,685 656,685"/>
+          <!-- edges: C→O -->
+          <path class="edge" data-e="C1-O1" d="M952,120 C992,120 968,128 1008,128"/>
+          <path class="edge" data-e="C1-O2" d="M952,120 C992,120 968,260 1008,260"/>
+          <path class="edge" data-e="C2-O3" d="M952,233 C992,233 968,392 1008,392"/>
+          <path class="edge" data-e="C3-O1" d="M952,346 C992,346 968,128 1008,128"/>
+          <path class="edge" data-e="C3-O2" d="M952,346 C992,346 968,260 1008,260"/>
+          <path class="edge" data-e="C3-O3" d="M952,346 C992,346 968,392 1008,392"/>
+          <path class="edge" data-e="C4-O1" d="M952,459 C992,459 968,128 1008,128"/>
+          <path class="edge" data-e="C4-O4" d="M952,459 C992,459 968,524 1008,524"/>
+          <path class="edge" data-e="C5-O5" d="M952,572 C992,572 968,656 1008,656"/>
+          <path class="edge" data-e="C6-O1" d="M952,685 C992,685 968,128 1008,128"/>
+          <path class="edge" data-e="C6-O3" d="M952,685 C992,685 968,392 1008,392"/>
+          <path class="edge" data-e="C6-O4" d="M952,685 C992,685 968,524 1008,524"/>
+          <path class="edge" data-e="C6-O5" d="M952,685 C992,685 968,656 1008,656"/>
+
+          <!-- nodes: problems -->
+          <g class="node p" data-k="P1">
+            <rect x="24" y="72" width="248" height="112"/>
+            <text class="badge" x="36" y="92">P1</text>
+            <text class="title" x="36" y="116">该触发的没触发</text>
+            <text class="sub"   x="36" y="140">触发条件明明匹配，skill 却从未</text>
+            <text class="sub"   x="36" y="156">加载，会话结束也无人知晓</text>
+          </g>
+          <g class="node p" data-k="P2">
+            <rect x="24" y="204" width="248" height="112"/>
+            <text class="badge" x="36" y="224">P2</text>
+            <text class="title" x="36" y="248">token 花在哪了</text>
+            <text class="sub"   x="36" y="272">重复注入 / 压缩重读 / 缓存失效</text>
+            <text class="sub"   x="36" y="288">活体组成不落盘，事后难回溯</text>
+          </g>
+          <g class="node p" data-k="P3">
+            <rect x="24" y="336" width="248" height="112"/>
+            <text class="badge" x="36" y="356">P3</text>
+            <text class="title" x="36" y="380">加载了但没做</text>
+            <text class="sub"   x="36" y="404">playbook 在上下文里，步骤执行</text>
+            <text class="sub"   x="36" y="420">度无从判定，自报不可信</text>
+          </g>
+          <g class="node p" data-k="P4">
+            <rect x="24" y="468" width="248" height="112"/>
+            <text class="badge" x="36" y="488">P4</text>
+            <text class="title" x="36" y="512">调用链断裂</text>
+            <text class="sub"   x="36" y="536">子代理派发是内联 sidechain，IDE</text>
+            <text class="sub"   x="36" y="552">通道日志另存一库，不 join 即孤儿</text>
+          </g>
+          <g class="node p" data-k="P5">
+            <rect x="24" y="600" width="248" height="112"/>
+            <text class="badge" x="36" y="620">P5</text>
+            <text class="title" x="36" y="644">病根在 catalog</text>
+            <text class="sub"   x="36" y="668">description 冗余 / 缺失、体量超标；</text>
+            <text class="sub"   x="36" y="684">个案散乱，纠规则缺跨会话视角</text>
+          </g>
+
+          <!-- nodes: approach -->
+          <g class="node a" data-k="A1">
+            <rect x="336" y="72" width="248" height="112"/>
+            <text class="badge" x="348" y="92">A1</text>
+            <text class="title" x="348" y="116">只读日志，不插桩</text>
+            <text class="sub"   x="348" y="140">从已落盘日志确定性抽取；</text>
+            <text class="sub"   x="348" y="156">没记的标 inference，不编造</text>
+          </g>
+          <g class="node a" data-k="A2">
+            <rect x="336" y="204" width="248" height="112"/>
+            <text class="badge" x="348" y="224">A2</text>
+            <text class="title" x="348" y="248">事实 / 推断 / 判断分离</text>
+            <text class="sub"   x="348" y="272">log fact · inference · judgment</text>
+            <text class="sub"   x="348" y="288">EST 与 billed 永不混算</text>
+          </g>
+          <g class="node a" data-k="A3">
+            <rect x="336" y="336" width="248" height="112"/>
+            <text class="badge" x="348" y="356">A3</text>
+            <text class="title" x="348" y="380">证据协议</text>
+            <text class="sub"   x="348" y="404">LLM 只答一个问题：该不该触发；</text>
+            <text class="sub"   x="348" y="420">判断必须附逐字引用，否则丢弃</text>
+          </g>
+          <g class="node a" data-k="A4">
+            <rect x="336" y="468" width="248" height="112"/>
+            <text class="badge" x="348" y="488">A4</text>
+            <text class="title" x="348" y="512">统一 Event → 审计 IR</text>
+            <text class="sub"   x="348" y="536">三种磁盘格式归一为 Event；</text>
+            <text class="sub"   x="348" y="552">证据台账进版本化中间表示</text>
+          </g>
+          <g class="node a" data-k="A5">
+            <rect x="336" y="600" width="248" height="112"/>
+            <text class="badge" x="348" y="620">A5</text>
+            <text class="title" x="348" y="644">双轴评测 + 门禁化</text>
+            <text class="sub"   x="348" y="668">expectations（路由）× IF（执行度）</text>
+            <text class="sub"   x="348" y="684">退出码进 CI，路由回归可卡</text>
+          </g>
+
+          <!-- nodes: capabilities -->
+          <g class="node c" data-k="C1">
+            <rect x="656" y="72" width="296" height="96"/>
+            <text class="badge" x="668" y="90">C1</text>
+            <text class="title" x="668" y="112">多格式解析 · 时间线</text>
+            <text class="sub"   x="668" y="134">wire.py 三格式 → 统一 Event；</text>
+            <text class="sub"   x="668" y="150">timeline.py 加载 / 直读 / 压缩事实序列</text>
+          </g>
+          <g class="node c" data-k="C2">
+            <rect x="656" y="185" width="296" height="96"/>
+            <text class="badge" x="668" y="203">C2</text>
+            <text class="title" x="668" y="225">token 治理 · 账单侧通道</text>
+            <text class="sub"   x="668" y="247">六桶 / 缓存 / 增长形状 / 重复注入分类；</text>
+            <text class="sub"   x="668" y="263">billing 只读账单 + ide_db join</text>
+          </g>
+          <g class="node c" data-k="C3">
+            <rect x="656" y="298" width="296" height="96"/>
+            <text class="badge" x="668" y="316">C3</text>
+            <text class="title" x="668" y="338">审计 IR · 证据台账</text>
+            <text class="sub"   x="668" y="360">loads / dispatch / skill_tree /</text>
+            <text class="sub"   x="668" y="376">intervention / billed 台账，版本化 EST</text>
+          </g>
+          <g class="node c" data-k="C4">
+            <rect x="656" y="411" width="296" height="96"/>
+            <text class="badge" x="668" y="429">C4</text>
+            <text class="title" x="668" y="451">LLM 判断层</text>
+            <text class="sub"   x="668" y="473">judge.py 反事实触发判断；</text>
+            <text class="sub"   x="668" y="489">if_eval.py 遵循度——覆盖率重算</text>
+          </g>
+          <g class="node c" data-k="C5">
+            <rect x="656" y="524" width="296" height="96"/>
+            <text class="badge" x="668" y="542">C5</text>
+            <text class="title" x="668" y="564">catalog · 离线体检</text>
+            <text class="sub"   x="668" y="586">catalog.py 触发语料 + --injected 注入；</text>
+            <text class="sub"   x="668" y="602">catalog-audit 零 LLM 四块体检</text>
+          </g>
+          <g class="node c" data-k="C6">
+            <rect x="656" y="637" width="296" height="96"/>
+            <text class="badge" x="668" y="655">C6</text>
+            <text class="title" x="668" y="677">呈现 · 入口</text>
+            <text class="sub"   x="668" y="699">单文件报告 / skill 树 / bill 卡；</text>
+            <text class="sub"   x="668" y="715">CLI 退出码 + web 扫描 · 上传 · fleet</text>
+          </g>
+
+          <!-- nodes: outcomes -->
+          <g class="node o" data-k="O1">
+            <rect x="1008" y="72" width="208" height="112"/>
+            <text class="badge" x="1020" y="92">O1</text>
+            <text class="title" x="1020" y="116">会话审计报告</text>
+            <text class="sub"   x="1020" y="140">expectations · findings 带证据</text>
+            <text class="sub"   x="1020" y="156">IF 判定 · 生命周期 · 事件流</text>
+          </g>
+          <g class="node o" data-k="O2">
+            <rect x="1008" y="204" width="208" height="112"/>
+            <text class="badge" x="1020" y="224">O2</text>
+            <text class="title" x="1020" y="248">实际 skill 树</text>
+            <text class="sub"   x="1020" y="272">agents → dispatch → loads；</text>
+            <text class="sub"   x="1020" y="288">sidechain + IDE DB join 补全</text>
+          </g>
+          <g class="node o" data-k="O3">
+            <rect x="1008" y="336" width="208" height="112"/>
+            <text class="badge" x="1020" y="356">O3</text>
+            <text class="title" x="1020" y="380">成本视图</text>
+            <text class="sub"   x="1020" y="404">bill 卡 EST + billed · 每轮增长</text>
+            <text class="sub"   x="1020" y="420">fleet 跨会话聚合</text>
+          </g>
+          <g class="node o" data-k="O4">
+            <rect x="1008" y="468" width="208" height="112"/>
+            <text class="badge" x="1020" y="488">O4</text>
+            <text class="title" x="1020" y="512">CI 门禁</text>
+            <text class="sub"   x="1020" y="536">--expect/--gate 退出码；</text>
+            <text class="sub"   x="1020" y="552">--steps 覆盖率低于门槛即 FAIL</text>
+          </g>
+          <g class="node o" data-k="O5">
+            <rect x="1008" y="600" width="208" height="112"/>
+            <text class="badge" x="1020" y="620">O5</text>
+            <text class="title" x="1020" y="644">catalog 体检报告</text>
+            <text class="sub"   x="1020" y="668">分层有效性 · 解析健康度 ·</text>
+            <text class="sub"   x="1020" y="684">体量分级 · description 质量</text>
+          </g>
+        </svg>
+      </div>
+
+      <div class="legend">
+        <span><i class="chip p"></i> 问题 · 观察到的失败模式</span>
+        <span><i class="chip a"></i> 思路 · 解题原则</span>
+        <span><i class="chip c"></i> 能力 · 建设的模块</span>
+        <span><i class="chip o"></i> 解题 · 交付物</span>
+        <span class="hint-line">箭头 = 支撑 / 派生关系</span>
+      </div>
+    </div>
+
+    <aside class="panel" id="panel">
+      <div class="hint">点击图中任意节点 →</div>
+      <h3 id="p-title">从 P1 开始</h3>
+      <div class="meta" id="p-meta">问题 · 路由失败</div>
+      <p id="p-body">
+        触发条件明明匹配，skill 却从未加载，会话结束也无人知晓。agent 自己不报告"忘了"。
+        要发现它，必须在事后对每个决策点做反事实判断：这个 skill 当时该不该触发？
+      </p>
+      <pre id="p-code">asd &lt;session&gt; --expect "tdd,bug-fix" --gate 0.75</pre>
+      <button id="resetBtn">重置高亮</button>
+    </aside>
+  </div>
+</section>
+
+<!-- ═══════════ 一、要解决的问题 ═══════════ -->
+<section>
+  <h2>一、要解决的问题</h2>
+  <p class="sec-intro">
+    coding agent 的表现 = 模型 × harness × 上下文管理。skill 机制（discovery 常驻、activation 按需的渐进式披露）
+    是 harness 给模型的"工具箱路由"，但路由本身没有仪表：失败不报错、成本不落账、遵守度无从核对。
+    具体是五个可观察的失败模式。
+  </p>
+
+  <h3><span class="tag p">P1</span>该触发的没触发 —— 路由失败不可见</h3>
+  <p>
+    触发条件明明匹配，skill 却从未加载，会话结束后没人知道。这类失败 agent 自己不会报告——它不知道自己"忘了"。
+    要发现它，必须在事后对每个决策点做<b>反事实判断</b>：在当时的上下文里，这个 skill 该不该触发？
+    没有工具做这件事，skill 越装越多，路由质量只能靠感觉。
+  </p>
+
+  <h3><span class="tag p">P2</span>token 花在哪了 —— 成本黑盒</h3>
+  <p>
+    同一份工具结果被反复读入（状态未外置）、压缩协议要求的重读、缓存失效、skill 正文与 harness 注入各占多少——
+    harness 的活体 context 组成视图不落盘，事后无法回溯。实测数据说明不测量就说不清：
+    某 Qoder 会话 120 个请求、89% 缓存命中；重复注入的 23.7k extra token 里 99.6% 属压缩协议内重读——
+    <b>不测量就分不清"协议税"与"真冗余"</b>，治理无从下手。
+  </p>
+
+  <h3><span class="tag p">P3</span>加载了但没做 —— 遵守度不可度量</h3>
+  <p>
+    skill 加载了、playbook 也在上下文里，但编号步骤做了没有？模型自报"已完成"不可信；
+    带理由的跳过是否合规也无从判定。需要从轨迹逐步判定 covered / partial / skipped，
+    且覆盖率必须由判定重算，而不是采信模型自己的说法。
+  </p>
+
+  <h3><span class="tag p">P4</span>调用链断裂 —— 全景不可见</h3>
+  <p>
+    子代理里加载的 skill 归因到谁？Qoder transcript 的派发链是内联 sidechain，主时间线看不见；
+    IDE 通道的子代理日志另存一个 SQLite。不做 join，派发就是孤儿，实际 skill 调用树就是断的——
+    正式加载（Skill 工具）与直读（拿文件工具读 SKILL.md 绕过机制）两条通道混在一起，更难看清。
+  </p>
+
+  <h3><span class="tag p">P5</span>病根在 catalog —— 规则层不可诊断</h3>
+  <p>
+    个案审计说"这个 skill 没被路由"，病根却常在 catalog 本身：description 冗长稀释信噪比、过短无法路由、
+    体量超标导致每次激活都交重税。而且个案太散——要<b>纠规则不纠个案</b>，需要跨会话聚合的视角，
+    以及一个不依赖会话日志、不调 LLM 就能体检 catalog 的手段。
+  </p>
+</section>
+
+<!-- ═══════════ 二、解题思路 ═══════════ -->
+<section>
+  <h2>二、解题思路</h2>
+
+  <div class="callout">
+    核心思想：<b>确定性事实与 LLM 判断严格分离。</b>
+    事实从日志确定性抽取、可复核可追溯；LLM 只回答一个问题——"在对话的这个决策点上，这个 skill 该不该触发？"
+    没有证据的判断被当作工具缺陷丢弃，而不是当作发现呈现。
+  </div>
+  <p class="sec-intro">五条原则，每条都是对上面某个问题的直接回应。</p>
+
+  <h3><span class="tag a">A1</span>定位测量层，只读日志不插桩</h3>
+  <p>
+    asd 不进入 agent 运行路径、不注入探针。日志已落盘的事实（加载事件、usage 记录、压缩事件、prompt 哈希）
+    确定性抽取；日志没记录的（如"skill 被压缩挤出上下文"）绝不编造，显式标注为 inference。
+    代价是精度受日志所限；收益是<b>历史会话可审计</b>、零侵入、别人机器导出的 transcript 也能测。
+  </p>
+
+  <h3><span class="tag a">A2</span>事实 / 推断 / 判断三级标注</h3>
+  <p>
+    报告里每个结论都标来源：<b>log fact</b>（日志原文可核对）、<b>inference</b>（从事实推导，标注推导规则）、
+    <b>judgment</b>（LLM 反事实判断）。成本上估算（EST）与账单（billed）分开呈现、永不混算；
+    无证据的行显示 unavailable 而非 0——读者永远知道自己在看什么，数字不会被冒充。
+  </p>
+
+  <h3><span class="tag a">A3</span>证据协议</h3>
+  <p>
+    LLM 判断必须附会话原文的<b>逐字引用</b>；证据对不上轨迹的一律丢弃，计为工具缺陷而非发现。
+    这条把"判断的可信度"变成了可机械校验的东西——缺陷多时先怀疑解析器，不急着怀疑 agent。
+    判断层可整体降级（无凭据自动回落事实模式）、可抽样（<code>--judge-limit</code>），贵不贵自己控制。
+  </p>
+
+  <h3><span class="tag a">A4</span>统一 Event 模型 + 审计 IR</h3>
+  <p>
+    三种磁盘格式（Kimi CLI / 桌面版、Qoder transcript、Codex rollout）在解析层归一为同一个 Event，
+    下游模块只见一种形状。所有分析建立在版本化的中间表示（AuditDocument）上：
+    证据台账、加载链、派发链、干预标注、账单块。IR 可导出（<code>--ir-out</code> / <code>--ir-analyses</code>），
+    第三方可独立复核——审计结论本身也可被审计。
+  </p>
+
+  <h3><span class="tag a">A5</span>双轴评测 + 门禁化</h3>
+  <p>
+    "遵守"拆成两个正交轴：<b>expectations</b>（按路由规则该消费什么）与 <b>instruction following</b>
+    （规定动作执行度——带 skip 理由的跳过也计 0，因为这一轴度量执行度、不度量裁量合规，裁量合规看另一轴）。
+    两条轴都能变成 CI 退出码（<code>--expect</code> + <code>--gate</code>、<code>--steps</code> 默认门槛 0.75），
+    路由回归从"感觉变差了"变成可卡住的失败。
+  </p>
+</section>
+
+<!-- ═══════════ 三、能力建设 ═══════════ -->
+<section>
+  <h2>三、能力建设</h2>
+  <p class="sec-intro">
+    能力按管线分层：日志进来，解析归一，进 IR，一部分走确定性分析、一部分走 LLM 判断，最后渲染成交互报告。
+    纯标准库实现、零第三方依赖，800+ pytest 用例，测试夹具覆盖各格式会话样本。
+  </p>
+
+  <table>
+    <thead>
+      <tr><th>层</th><th>模块</th><th>职责</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td class="k">解析</td>
+        <td class="mod">wire.py<br>timeline.py</td>
+        <td>三种磁盘格式 → 统一 Event（桌面版专有记录翻译成 CLI 事件类型；子代理日志归因到父时间线）；加载 / 直读 / 压缩 / token 序列的事实时间线</td>
+      </tr>
+      <tr>
+        <td class="k">侧通道</td>
+        <td class="mod">billing.py<br>ide_db.py</td>
+        <td>只读 SharedClientCache，按 session uuid join 每请求真实计费 token；AES 解密阶梯 + <code>parent_tool_call_id</code> join IDE 通道子代理派发链。每轮上下文增长可由账单序列重建</td>
+      </tr>
+      <tr>
+        <td class="k">中间表示</td>
+        <td class="mod">ir/</td>
+        <td>版本化 AuditDocument：证据台账（loads / dispatch / skill_tree / intervention / billed）+ 六类分析；EST 估算器有活体 /context 快照的手工标定流程（docs/calibration.md）</td>
+      </tr>
+      <tr>
+        <td class="k">判断</td>
+        <td class="mod">judge.py<br>if_eval.py</td>
+        <td>反事实触发判断（任意 OpenAI 兼容端点、无凭据降级、可抽样、证据强制）；playbook 逐步判定 covered / partial / skipped，覆盖率由判定重算、证据对不上降级 skipped</td>
+      </tr>
+      <tr>
+        <td class="k">catalog</td>
+        <td class="mod">catalog.py<br>catalog_audit.py</td>
+        <td>扫描 skill 目录提取触发语料（用户目录递归、同名按版本去重）；<code>--injected</code> 手工注入 skill 原文覆盖 / 补全 catalog；离线静态体检零 LLM、零凭据、不需要会话日志</td>
+      </tr>
+      <tr>
+        <td class="k">呈现</td>
+        <td class="mod">report.py<br>tree_html.py<br>bill.py</td>
+        <td>单文件 HTML 报告（无 JS、无外部资源、原生 details 折叠、内联 SVG，skill 展示加载时内容快照）；实际 skill 树独立页；账单摘要卡（EST 小计 + 路由摘要 + 可选 billed 块 + 子代理返回台账）</td>
+      </tr>
+      <tr>
+        <td class="k">入口</td>
+        <td class="mod">cli.py<br>web.py</td>
+        <td>CLI 退出码语义（--steps 即门禁、--expect 需显式 --gate）；本地 Web 应用：会话扫描 / 上传（sha1 去重、与扫描会话同构分析）/ 审计表单（LLM 后台线程）/ fleet 聚合 / catalog 体检 / skill 树，另有独立可用的 JSON API</td>
+      </tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- ═══════════ 四、能力如何解决问题 ═══════════ -->
+<section>
+  <h2>四、能力如何解决问题</h2>
+  <p class="sec-intro">
+    每个问题由一组能力组合回应，落地成一个交付物。机制列回答"为什么这个组合能解这个问题"。
+  </p>
+
+  <table>
+    <thead>
+      <tr><th>问题</th><th>能力组合</th><th>交付物</th><th>机制</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td class="k">P1 该触发没触发</td>
+        <td>catalog（触发语料）<br>+ judge（反事实）<br>+ 证据协议</td>
+        <td>findings<br>+ expectations 核对<br>+ CI 门禁</td>
+        <td>catalog 给出每个 skill 的触发条件语料；judge 在每个决策点反问"该不该触发"；阳性判断必须带逐字证据，无证据即工具缺陷。<code>--expect</code> 清单变命中 / 缺失表，<code>--gate</code> 卡路由回归</td>
+      </tr>
+      <tr>
+        <td class="k">P2 成本黑盒</td>
+        <td>tokenstats（六桶 / 缓存 / 增长形状 / 重复注入分类）<br>+ billed 侧通道</td>
+        <td>token governance 板块<br>+ bill 成本卡<br>+ fleet 聚合</td>
+        <td>事实从 usage 记录抽取；重复税按来源分类（压缩协议内重读 / 轮询 / 非压缩期），把协议税与真冗余分开；billed 块会话级口径、永不与 EST 混算，无证据显示 unavailable</td>
+      </tr>
+      <tr>
+        <td class="k">P3 加载了没做</td>
+        <td>if_eval + playbook 解析</td>
+        <td>IF 逐步判定表<br>+ 覆盖率 + PASS/FAIL</td>
+        <td>covered / partial / skipped 三态，带 skip 理由也计 0（度量执行度，不度量裁量合规）；覆盖率由判定重算、不信自报；与 expectations 双轴互补</td>
+      </tr>
+      <tr>
+        <td class="k">P4 调用链断裂</td>
+        <td>wire（sidechain 归一）<br>+ ide_db（join）<br>+ ir/skill_tree</td>
+        <td>实际 skill 树</td>
+        <td>内联 sidechain 按 <code>parent_tool_use_id</code> join；IDE 通道子代理链解密后 attach；加载标记别名感知，正式加载与直读两条通道分开呈现；孤儿派发有 join 提示</td>
+      </tr>
+      <tr>
+        <td class="k">P5 病根在 catalog</td>
+        <td>catalog_audit<br>+ fleet<br>+ web 上传</td>
+        <td>catalog 体检报告<br>+ fleet 汇总面板</td>
+        <td>离线静态体检只评 catalog 不评 agent（四块：分层有效性比值、解析健康度、体量分级、description 质量），可进 CI；fleet 跨会话聚合支撑"纠规则不纠个案"；上传通道让别人的会话进同一套分析</td>
+      </tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- ═══════════ 五、边界 ═══════════ -->
+<section>
+  <h2>五、边界（review 时同样重要）</h2>
+  <ul class="plain">
+    <li><b>只读不插桩</b>：精度受日志所限——日志不记录"skill 被丢弃"，所以挤出只能标注为推断；上下文测量、压缩事件、prompt 哈希在部分格式不可用，报告显示不可用、不用推断值顶替。</li>
+    <li><b>"加载了但内容不全 / 不对"v1 只呈现事实</b>，不做内容级判断；"加载了但没遵守"是独立的一条轴，由 <code>--steps</code> 单独评估，两个分数不合并。</li>
+    <li><b>估算不是账单</b>：catalog 体检和六桶里的 token 数字是版本化估算器的 EST，不是 harness 的真实计费；真实计费走 opt-in 的 billed 侧通道，且永不与 EST 混算。</li>
+    <li><b>体检不评价 agent 表现</b>：catalog-audit 只说 catalog 的成本与缺陷；评价 agent 表现是会话审计的职责。两份报告不合并成一个分数。</li>
+    <li><b>跨会话只有轻量 fleet 聚合</b>，不做趋势存储与历史对比；一次深度审计仍只针对一个会话。</li>
+    <li><b>web 服务只绑 localhost、无鉴权</b>，审计任务在内存里，重启即失（上传的会话文件持久化）。</li>
+  </ul>
+
+  <details class="glossary">
+    <summary>名词表</summary>
+    <dl>
+      <dt>log fact / inference / judgment</dt>
+      <dd>三级结论标注：日志原文可核对的事实 / 从事实显式推导并标注规则的推断 / LLM 反事实判断。</dd>
+      <dt>expectations</dt>
+      <dd>按路由规则预期被消费的 skill 清单（<code>--expect</code>），渲染成 loaded / file-read / MISSING 核对表。</dd>
+      <dt>findings</dt>
+      <dd>本该触发却从未加载的 skill，每条带决策点、轮次、置信度与逐字证据。</dd>
+      <dt>IF（instruction following）</dt>
+      <dd>playbook 编号步骤的执行度判定，covered / partial / skipped 加权计覆盖率。</dd>
+      <dt>discovery / activation</dt>
+      <dd>渐进式披露的两层：discovery 是常驻上下文的目录文案，activation 是按需加载的 skill 正文。</dd>
+      <dt>EST / billed</dt>
+      <dd>EST 是版本化估算器的 token 估算；billed 是 SharedClientCache 里的真实计费 token（会话级口径）。</dd>
+      <dt>审计 IR</dt>
+      <dd>版本化中间表示 AuditDocument：证据台账 + 分析产物，可经 <code>--ir-out</code> 导出复核。</dd>
+      <dt>sidechain / dispatch / orphan</dt>
+      <dd>子代理对话的内联记录 / 主代理派发子代理的调用 / 无法归因到派发点的子代理链。</dd>
+      <dt>直读（file-read）</dt>
+      <dd>用文件工具直接读 SKILL.md 绕过 Skill 机制——是日志事实，是否构成对正式加载的合理替代留给读者。</dd>
+    </dl>
+  </details>
+</section>
+
+<footer>
+  Agent Session Detective · 项目介绍页 · 2026-10-13 · 依据 README 与 docs/ 生成，命令与口径以仓库为准
+</footer>
+
+</div><!-- /wide -->
+
+<script>
+/* ── theme toggle ── */
+var toggle = document.getElementById('themeToggle');
+toggle.addEventListener('click', function () {
+  var el = document.documentElement;
+  el.classList.toggle('dark');
+  try {
+    localStorage.setItem('asd-doc-theme', el.classList.contains('dark') ? 'dark' : 'light');
+  } catch (e) {}
+});
+
+/* ── map interaction ── */
+var EDGES = [
+  ["P1","A2"],["P1","A3"],["P2","A1"],["P2","A4"],["P3","A2"],["P3","A5"],["P4","A4"],["P5","A1"],
+  ["A1","C1"],["A1","C2"],["A1","C5"],["A2","C3"],["A2","C4"],["A3","C4"],["A4","C1"],["A4","C3"],["A5","C4"],["A5","C6"],
+  ["C1","O1"],["C1","O2"],["C2","O3"],["C3","O1"],["C3","O2"],["C3","O3"],["C4","O1"],["C4","O4"],["C5","O5"],
+  ["C6","O1"],["C6","O3"],["C6","O4"],["C6","O5"]
+];
+
+var DETAIL = {
+  P1: {
+    title: "该触发的没触发", meta: "问题 · 路由失败",
+    body: "触发条件明明匹配，skill 却从未加载，会话结束也无人知晓。agent 自己不报告\"忘了\"。要发现它，必须在事后对每个决策点做反事实判断：这个 skill 当时该不该触发？",
+    code: "asd <session> --expect \"tdd,bug-fix\" --gate 0.75"
+  },
+  P2: {
+    title: "token 花在哪了", meta: "问题 · 成本黑盒",
+    body: "同一份工具结果被反复读入、压缩协议要求的重读、缓存失效、skill 正文与 harness 注入各占多少——活体 context 组成视图不落盘，事后无法回溯。实测：120 个请求、89% 缓存命中；重复注入 23.7k extra 里 99.6% 属压缩协议内重读。不测量就分不清协议税与真冗余。",
+    code: "asd <transcript>.jsonl --billed-usage"
+  },
+  P3: {
+    title: "加载了但没做", meta: "问题 · 遵守度",
+    body: "skill 加载了、playbook 也在上下文里，但编号步骤做了没有？模型自报\"已完成\"不可信；带理由的跳过是否合规也无从判定。需要从轨迹逐步判 covered / partial / skipped，覆盖率重算。",
+    code: "asd <session> --steps playbook.md --gate 0.75"
+  },
+  P4: {
+    title: "调用链断裂", meta: "问题 · 全景",
+    body: "子代理里加载的 skill 归因到谁？Qoder transcript 的派发链是内联 sidechain，IDE 通道的子代理日志另存一个 SQLite——不 join，派发就是孤儿，skill 树就是断的。",
+    code: "asd <t>.jsonl --ide-db --tree-out tree.html"
+  },
+  P5: {
+    title: "病根在 catalog", meta: "问题 · 规则层",
+    body: "个案审计说\"这个 skill 没被路由\"，病根常在 catalog：description 冗长稀释信噪比、过短无法路由、体量超标每次激活交重税。且个案散乱——要纠规则不纠个案，需要跨会话聚合与不依赖会话日志的体检手段。",
+    code: "asd catalog-audit --json"
+  },
+  A1: {
+    title: "只读日志，不插桩", meta: "思路 · 测量层定位",
+    body: "asd 不进 agent 运行路径、不插桩。日志已落盘的事实确定性抽取；日志没记的（如 skill 被压缩挤出）绝不编造，显式标 inference。代价是精度受日志所限，收益是历史会话可审计、别人机器导出的 transcript 也能测。",
+    code: "定位=测量层，不替代 harness 的活体视图"
+  },
+  A2: {
+    title: "事实 / 推断 / 判断分离", meta: "思路 · 三级标注",
+    body: "报告里每个结论都标来源：log fact（原文可核对）/ inference（标注推导）/ judgment（LLM 反事实）。估算（EST）与账单（billed）分开呈现、永不混算；无证据的行显示 unavailable 而非 0。",
+    code: "判定是判断，证据是事实——分开渲染"
+  },
+  A3: {
+    title: "证据协议", meta: "思路 · 可信度机械化",
+    body: "LLM 只回答一个问题：\"在对话的这个决策点上，这个 skill 该不该触发？\"每条阳性判断必须附会话原文逐字引用；证据对不上轨迹的一律丢弃，计为工具缺陷而非发现。缺陷多时先怀疑解析器。无凭据自动降级事实模式，--judge-limit 可便宜抽样。",
+    code: "ASD_JUDGE_MODEL=deepseek-flash asd <session>"
+  },
+  A4: {
+    title: "统一 Event → 审计 IR", meta: "思路 · 归一与可复核",
+    body: "三种磁盘格式（Kimi CLI / 桌面、Qoder transcript、Codex rollout）在解析层统一为同一个 Event，下游只见一种形状。分析建立在版本化审计 IR 上：证据台账、加载链、派发链、干预标注、账单块。IR 可导出，第三方可复核。",
+    code: "asd <session> --ir-out audit.json --ir-analyses a.json"
+  },
+  A5: {
+    title: "双轴评测 + 门禁化", meta: "思路 · 可执行结论",
+    body: "遵守度拆成两个正交轴：expectations（按路由规则该消费什么）与 instruction following（规定动作执行度——带 skip 理由也计 0，度量执行度不度量裁量合规）。两条轴都能变 CI 退出码，路由回归可卡。",
+    code: "asd <s> --expect \"tdd\" --gate 0.75 || exit 1"
+  },
+  C1: {
+    title: "多格式解析 · 时间线", meta: "能力 · 解析层",
+    body: "wire.py 把 Kimi CLI / 桌面版、Qoder transcript、Codex rollout 翻译成统一 Event；桌面版专有记录（token_counting、llm.request 等）映射到 CLI 事件类型；子代理日志归因到父时间线。timeline.py 产出加载 / 直读 / 压缩 / token 的事实时间线。",
+    code: "src/…/wire.py · timeline.py"
+  },
+  C2: {
+    title: "token 治理 · 账单侧通道", meta: "能力 · 成本测量",
+    body: "tokenstats：缓存命中率、每轮增长形状（linear / sublinear / accelerating）、六桶分解、prompt 哈希翻转、重复注入四分类。billing.py 只读 SharedClientCache 按 uuid join 真实计费 token；ide_db.py 解密并 join IDE 子代理链。每轮增长可由账单序列重建——只有 usage 记录的格式也能画图。",
+    code: "tokenstats.py · billing.py · ide_db.py"
+  },
+  C3: {
+    title: "审计 IR · 证据台账", meta: "能力 · 中间表示",
+    body: "版本化中间表示：证据台账（skill loads / dispatches / skill_tree / intervention / billed usage）+ 六类分析。EST 估算器与活体 /context 快照有手工标定流程（docs/calibration.md）。判分缓存指纹含 IR 版本，跨版本自失效、不可比。",
+    code: "src/…/ir/ · --ir-out / --ir-analyses"
+  },
+  C4: {
+    title: "LLM 判断层", meta: "能力 · 判断",
+    body: "judge.py 反事实触发判断，任意 OpenAI 兼容端点；无凭据自动降级事实模式，--judge-limit 便宜抽样。if_eval.py 对 playbook 编号步骤判 covered / partial / skipped，覆盖率由判定重算、不信模型自报；证据对不上降级 skipped。",
+    code: "judge.py · if_eval.py"
+  },
+  C5: {
+    title: "catalog · 离线体检", meta: "能力 · 规则层",
+    body: "catalog.py 扫描 skill 目录提取触发语料（用户目录递归、同名按版本去重）；--injected 手工注入 skill 原文，覆盖或补全 catalog——把 harness 内置 skill 纳入审计的手段。catalog_audit.py 零 LLM、零凭据、不需要会话日志，因此可进 CI。",
+    code: "catalog.py · catalog_audit.py"
+  },
+  C6: {
+    title: "呈现 · 入口", meta: "能力 · 交付",
+    body: "report.py 单文件 HTML 报告（无 JS、无外部资源、原生 details 折叠、内联 SVG）；tree_html.py 实际 skill 树独立页；bill.py 账单摘要。web.py 本地应用：会话扫描 / 上传（sha1 去重、同构分析）/ 审计表单（LLM 后台线程执行）/ fleet 聚合 / JSON API。",
+    code: "report.py · tree_html.py · web.py · --serve"
+  },
+  O1: {
+    title: "会话审计报告", meta: "交付 · 报告",
+    body: "expectations 核对表（loaded / file-read / MISSING）、findings（决策点 + 置信度 + 逐字证据）、IF 逐步判定、skill 生命周期（加载时内容快照、evicted? 推断标注）、六桶 token 治理、事件流（user / think / say / tool / result / compact 角色徽章）。每个板块标题旁有 ? 浮层说明怎么读。",
+    code: "asd <session> --open"
+  },
+  O2: {
+    title: "实际 skill 树", meta: "交付 · 全景",
+    body: "agents → dispatch → skill loads 的真实调用树。内联 sidechain 按 parent_tool_use_id join，IDE 通道子代理链 AES 解密后 attach；别名感知的加载标记；孤儿派发有 join 提示。",
+    code: "--tree-out tree.html · GET /api/tree?ide_db=1"
+  },
+  O3: {
+    title: "成本视图", meta: "交付 · 成本",
+    body: "bill 成本卡：EST 小计（上下文增长 / 重复税 / skill 加载 / 子代理返回四行）+ 路由摘要 + 可选 billed 块（会话级口径，永不与 EST 混算；超 2000 EST token 的子代理返回标 size）。fleet 面板跨会话聚合：平均缓存命中率、增长形状分布、重复注入总量（按分类）。",
+    code: "--billed-usage · web 侧栏 fleet"
+  },
+  O4: {
+    title: "CI 门禁", meta: "交付 · 门禁",
+    body: "--steps 一开即生效（默认门槛 0.75）；--expect 需显式 --gate 才卡退出码——两条失败路径触发条件不同。路由回归与规定动作缺漏都能挡在合并前。",
+    code: "asd <s> --expect \"tdd\" --gate 0.75 || exit 1"
+  },
+  O5: {
+    title: "catalog 体检报告", meta: "交付 · 规则层",
+    body: "四块结论：分层有效性比值（discovery 常驻 vs activation 潜在，量化渐进式披露划不划算）、解析健康度（哪些 skill 会因缺路由依据被误判）、体量分级（激活成本排序）、description 质量。只评 catalog 不评 agent，与会话审计是两回事，不合并成一个分数。",
+    code: "asd catalog-audit   # 可进 CI"
+  }
+};
+
+var nodes = Array.prototype.slice.call(document.querySelectorAll('.node'));
+var edges = Array.prototype.slice.call(document.querySelectorAll('.edge'));
+var pTitle = document.getElementById('p-title');
+var pMeta  = document.getElementById('p-meta');
+var pBody  = document.getElementById('p-body');
+var pCode  = document.getElementById('p-code');
+var hint   = document.querySelector('#panel .hint');
+var current = null;
+
+function reach(k) {
+  var seen = { }, q = [k], i, j;
+  seen[k] = true;
+  while (q.length) {
+    var n = q.shift();
+    for (i = 0; i < EDGES.length; i++) {
+      if (EDGES[i][0] === n && !seen[EDGES[i][1]]) { seen[EDGES[i][1]] = true; q.push(EDGES[i][1]); }
+    }
+  }
+  q = [k];
+  while (q.length) {
+    var m = q.shift();
+    for (j = 0; j < EDGES.length; j++) {
+      if (EDGES[j][1] === m && !seen[EDGES[j][0]]) { seen[EDGES[j][0]] = true; q.push(EDGES[j][0]); }
+    }
+  }
+  return seen;
+}
+
+function select(k) {
+  current = k;
+  var keep = reach(k);
+  nodes.forEach(function (n) {
+    n.classList.toggle('active', n.dataset.k === k);
+    n.classList.toggle('dimmed', !keep[n.dataset.k]);
+  });
+  edges.forEach(function (e) {
+    var parts = e.dataset.e.split('-');
+    var on = keep[parts[0]] && keep[parts[1]];
+    e.classList.toggle('hl', !!on);
+    e.classList.toggle('dimmed', !on);
+  });
+  var d = DETAIL[k];
+  if (d) {
+    hint.textContent = '链路高亮中 · 点击其它节点切换';
+    pTitle.textContent = d.title;
+    pMeta.textContent = d.meta;
+    pBody.innerHTML = d.body;
+    pCode.textContent = d.code;
+  }
+}
+
+function reset() {
+  current = null;
+  nodes.forEach(function (n) { n.classList.remove('active', 'dimmed'); });
+  edges.forEach(function (e) { e.classList.remove('hl', 'dimmed'); });
+  hint.textContent = '点击图中任意节点 →';
+  pTitle.textContent = '从 P1 开始';
+  pMeta.textContent = '问题 · 路由失败';
+  pBody.innerHTML = DETAIL.P1.body;
+  pCode.textContent = DETAIL.P1.code;
+}
+
+nodes.forEach(function (n) {
+  n.addEventListener('click', function () {
+    if (current === n.dataset.k) { reset(); } else { select(n.dataset.k); }
+  });
+});
+document.getElementById('resetBtn').addEventListener('click', reset);
+</script>
+</body>
+</html>
